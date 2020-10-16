@@ -17,7 +17,7 @@ class sat_layer(keras.layers.Layer):
         assert evals.dtype == tf.float64, "EigVals not f64 in llk"
         s_evs = tf.sort(evals, axis=0, direction='ASCENDING', name="sort_ev")#necessary?
         s_ixs = tf.argsort(evals, axis=0, direction='ASCENDING', stable=True, name="sort_ev_ix") 
-        n_s_evs = tf.realdiv(s_evs, self.obs_samples, name="norm_evals_by_os")
+        n_s_evs = tf.realdiv(s_evs, self.o_s, name="norm_evals_by_os")
         sum_n_s_evs = tf.cumsum(n_s_evs, axis=0, name="cumsum_evals")
         cond = tf.math.less_equal(sum_n_s_evs, self.delta) #TODO change first F ix
         k = tf.reduce_sum(tf.where(cond), axis=0, name="k_sketch")
@@ -30,11 +30,14 @@ class sat_layer(keras.layers.Layer):
         
         #running mean is probably cleaner to get adhoc from current o_s and r_s right? is that the same?
         sample_mean = tf.realdiv(runn_sum, o_s, name='sample_mean') #alt tf.math.scalar_mul()
-
+        #print(sample_mean)
+        
         sample_mean_dot = tf.tensordot(runn_sum, runn_sum, axes=0, name='sample_mean_dot') #alt tf.einsum()
-
+        #print(sample_mean_dot)
+        
         cov_mat = tf.math.subtract(tf.realdiv(sum_sqrs, o_s), sample_mean_dot, name='cov_matrix') 
-
+        #print(cov_mat)
+        
         eig_vals_raw, eig_vecs_raw = tf.linalg.eig(cov_mat, name='eig_decomp') 
         
         eig_vals = tf.cast(tf.math.abs(tf.convert_to_tensor(eig_vals_raw)), dtype=tf.float64, name="eig_vals_abs")
@@ -49,11 +52,11 @@ class sat_layer(keras.layers.Layer):
         
         proj_mat = tf.matmul(k_eig_vecs, k_eig_vecs, transpose_a=True, name="proj_mat")
 
-        saturation = tf.truediv(k_fl, self.layer_width, name="saturation")
+        saturation = tf.truediv(k_fl, self.layer_width_tensor, name="saturation")
         
        
         
-        for node in [inp, sqr_inp, sum_sqrs, running_sum, sample_mean,
+        for node in [sample_mean,
                      sample_mean_dot, cov_mat, eig_vals_raw, eig_vals,
                      eig_vecs, k_fl, k_eig_vecs, proj_mat, saturation]:
             assert node.dtype in [tf.float64, tf.complex128], "Wrong dtype on {} has type {}".format(str(node),str(node.dtype)) 
@@ -67,6 +70,7 @@ class sat_layer(keras.layers.Layer):
         super(sat_layer, self).__init__(name=name)
         
         self.layer_width=input_shape[1:]
+        self.layer_width_tensor=tf.constant(input_shape[1:], dtype=tf.float64)
         self.delta = tf.dtypes.cast(delta, dtype=tf.float64)
         
     def build(self, input):
@@ -86,7 +90,10 @@ class sat_layer(keras.layers.Layer):
             
     def update(self, input_tensor):
         
-        shape=input_tensor.get_shape()#hm get_shape might fail
+        #print("input_tensor: {}".format(input_tensor))
+        
+        shape=input_tensor.get_shape()#get_shape might fail
+        print("input tensor has shape: {}".format(shape))
         
         batch_size = shape[0] 
         if not batch_size:
@@ -106,7 +113,13 @@ class sat_layer(keras.layers.Layer):
         self.r_s.assign_add(sum_over_batch) #add sum over batch
         self.s_s.assign_add(sqr_inp) #add sqr of batch inp
         
-        return self.o_s, self.r_s, self.s_s #do i need ctr deps to ensure this gets evaluated? assign add shoudldo
+        tf.debugging.assert_shapes([
+            (input_tensor, (None, self.layer_width)),
+            (self.o_s, ()),
+            (self.r_s, (self.layer_width,))
+        ])
+        
+        return self.o_s, self.r_s, self.s_s #do i need ctrl-dep to ensure this gets evaluated? assign add shoudldo
         
    
     def reset(self):
@@ -114,12 +127,14 @@ class sat_layer(keras.layers.Layer):
         pass
         
  
-    def __call__(self, input):
+    def __call__(self, input, ):
         if len(self.weights)==0:
             self.build(input)
         return self.update(input)
         #return self.saturation
-            
+    
+    def result(self):
+        return self.sat(self.o_s, self.r_s, self.s_s)
   
 
 

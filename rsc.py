@@ -56,7 +56,7 @@ def pack(features, label):
 def onehot_label(features, label):
     return features, tf.one_hot(label, on_value=1, off_value=0, dtype=tf.int32, depth=2)
 
-def get_titanic_dataset(path_train='./data/datasets/titanic_train.csv', path_test='./data/datasets/titanic_eval.csv'):
+def get_titanic_dataset(path_train='./data/datasets/titanic_train.csv', path_test='./data/datasets/titanic_eval.csv', batch_size=None):
     CSV_COLUMNS = ['survived', 'sex', 'age', 'n_siblings_spouses', 'parch', 'fare', 'class', 'deck', 'embark_town', 'alone'] #if theres no column_name row in csv
     SELECT_COLUMNS = ['survived', 'age', 'n_siblings_spouses', 'parch', 'fare'] #for selecting only some columns
     LABEL_COLUMN = 'survived' #what column to use as label for prediction (idk how exactly to pass both, the constructor has only one arg for labels)
@@ -77,6 +77,11 @@ def get_titanic_dataset(path_train='./data/datasets/titanic_train.csv', path_tes
     train_pack = raw_train_data.map(pack).map(onehot_label)
     test_pack = raw_test_data.map(pack).map(onehot_label)
 
+    if batch_size:
+        train = train_pack.batch(batch_size)
+        test = test_pack.batch(batch_size)
+        return train, test
+    
     return train_pack, test_pack
         
 def get_t_data_broadcast_label(dim=1):
@@ -100,14 +105,14 @@ def get_data():
 #  MODELS
 ###############################################################################
 
-def get_model(data, type="default", metrics=[], callbacks=[], depth=4, out_feat=4):
+def get_model(data, type="default", metrics=[], callbacks=[], depth=4, out_feat=2):
     #https://www.tensorflow.org/guide/keras/train_and_evaluate/
     #inputs = keras.Input(shape=(784,), name="digits")
-    inputs = keras.Input(shape=(4), name="input")
-    x = layers.Dense(20, activation="relu", name="dense_1")(inputs)
-    x = layers.Dense(20, activation="relu", name="dense_2")(x)
-    x = layers.Dense(20, activation="relu", name="dense_3")(x)
-    x = layers.Dense(21, activation="relu", name="dense_4")(x)
+    inputs = keras.Input(shape=(4,), name="model_input")
+    x = layers.Dense(21, activation="relu", name="dense_1")(inputs)
+    x = layers.Dense(22, activation="relu", name="dense_2")(x)
+    x = layers.Dense(23, activation="relu", name="dense_3")(x)
+    x = layers.Dense(24, activation="relu", name="dense_4")(x)
     outputs = layers.Dense(units=2, activation="softmax", name="predictions")(x)
 
     model = tf.keras.Model(inputs=inputs, outputs=outputs)
