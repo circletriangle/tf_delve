@@ -55,7 +55,7 @@ class sat_layer(keras.layers.Layer):
         
         #Divide Cum. sums by total sum of EVs (trace(CovMat) ~ variance of CovMat)
         dim_ratios = tf.realdiv(cum_evs, cum_evs[-1], name="div_by_trace")
-        #print("Dim ratios: {}".format(dim_ratios))
+        print("Dim ratios: {}".format(dim_ratios))
         
         cond = tf.math.less_equal(dim_ratios, self.delta) #TODO change first F ix
         #print("cond: {}".format(cond))
@@ -84,21 +84,22 @@ class sat_layer(keras.layers.Layer):
            
         Returns: k and the indexes of the k largest eigenvalues.         
         """
+        pr = 5
         
         #Invert order -> ascending real parts negative, should be desc. then (maybe difference abs/smaller than)
         s_evs = evals#tf.reverse(evals, axis=[-1], name="invert_comp_evs")
         #assert evals[2]==s_evs[-3], "inverting order problem"
-        print("Evals: {}".format(s_evs))
+        print("Evals head: {}\nEvals tail: {}".format(s_evs[:pr], s_evs[-pr:]))
         
         #Cumulative sum of largest EVs
         cum_evs = tf.cumsum(s_evs, axis=0, name="cumsum_evals") 
-        print("Cumulating EVs: {}".format(cum_evs))
+        print("Cumulating EVs head: {}\nCum EVs tail: {}".format(cum_evs[:pr], cum_evs[-pr:]))
         
         #Divide Cum. sums by total sum of EVs (trace(CovMat) ~ variance of CovMat)
         #dim_ratios = tf.realdiv(cum_evs, cum_evs[-1], name="div_by_trace")
         #print("Dim ratios: {}".format(dim_ratios)) # -> ratios w real parts slightly over 1, im still small ~e-20
         dim_ratios = tf.realdiv(tf.math.real(cum_evs), tf.math.real(cum_evs[-1]), name="div_by_total_variance_real")
-        print("Dim ratios: {}".format(dim_ratios)) # -> ratios of real parts STILL slightly over 1
+        print("Dim ratios head: {}\nDim ratios: tail: {}".format(dim_ratios[:pr], dim_ratios[-pr:])) # -> ratios of real parts STILL slightly over 1
         #ratios over 1 -> either bc of im or sorting problem (Sorting problem)
         #
         
@@ -135,35 +136,29 @@ class sat_layer(keras.layers.Layer):
         Returns:
         scalar-shape tensor: saturation 
         """    
-        #print("sat() input-states shp: \no_s: {}\nsum_sqrs: {}\nrunn_sum: {}".format(tf.shape(o_s),tf.shape(sum_sqrs),tf.shape(runn_sum)))
         
         #SAMPLE MEAN (from running sum of features and running sample count) (Not computed every batch)
         sample_mean = tf.realdiv(runn_sum, o_s, name='sample_mean') #alt tf.math.scalar_mul()
         #print(sample_mean)
         
         #DOT PRODUCT OF SAMPLE MEAN
-        sample_mean_dot = tf.tensordot(runn_sum, runn_sum, axes=0, name='sample_mean_dot') #alt tf.einsum()
-        #print(sample_mean_dot)
-        
+        sample_mean_dot = tf.tensordot(sample_mean, sample_mean, axes=0, name='sample_mean_dot') #alt tf.einsum()
+
         #COVARIANCE MATRIX
         cov_mat = tf.math.subtract(tf.realdiv(sum_sqrs, o_s), sample_mean_dot, name='cov_matrix') 
         #print("CovMat with shape {}:\n {}".format(tf.shape(cov_mat),cov_mat))
         
         #EIGEN DECOMPOSITION TODO invert order here?, TODO check eig() as possible error source -> eigh?
         #abs() removes signs -> use tf.math.real() ignoring Im or use comp EVs 
-        eig_vals_raw, eig_vecs_raw = tf.linalg.eig(cov_mat, name='eig_decomp') 
+        eig_vals_raw, eig_vecs_raw = tf.linalg.eigh(cov_mat, name='eig_decomp') 
         eig_vals = tf.cast(tf.math.real(tf.convert_to_tensor(eig_vals_raw)), dtype=tf.float64, name="eig_vals_real")
         eig_vecs = tf.cast(tf.math.real(tf.convert_to_tensor(eig_vecs_raw)), dtype=tf.float64, name="eig_vecs_real")#why convert_to_tensor again? eig shld rtrn that 
         #print("Eigenvalues shape: {}".format(tf.shape(eig_vals)))
         
-        #TODO trace ~= complex Evals != abs evals -> abs also makes entries positive -.-
-        #maybe you should only do abs at the end (eg after summing k complex evals)
-        print("\nTrace of covmat: {}\nSum Evals raw: {}\nSum Evals abs: {}".format(tf.linalg.trace(cov_mat), tf.math.reduce_sum(eig_vals_raw), tf.math.reduce_sum(eig_vals)))
-        print("abs(rsum(comp_evals)): {}".format(tf.math.abs(tf.math.reduce_sum(eig_vals_raw))))
-        print("Comp Evals dtype: {}".format(eig_vals_raw.dtype))
+       
         
         #K
-        k, ixs = self.lossless_k_loopless_comp(eig_vals_raw) #abs.val compl ev #tf.constant(4, dtype=tf.int32)
+        k, ixs = self.lossless_k_loopless(eig_vals) #abs.val compl ev #tf.constant(4, dtype=tf.int32)
         k_fl = tf.cast(k, dtype=tf.float64, name="k_fl")
         print("K tensor: {}".format(k_fl))
 
@@ -245,7 +240,10 @@ class sat_layer(keras.layers.Layer):
         tf.debugging.assert_shapes([
             (input_tensor, (None, self.layer_width)),
             (self.o_s, ()),
-            (self.r_s, (self.layer_width,))
+            (self.r_s, (self.layer_width,)),
+            (self.s_s, (self.layer_width, self.layer_width)),
+            (sum_over_batch, (self.layer_width)),
+            (sqr_inp, (self.layer_width, self.layer_width))
         ])
         
         #do i need ctrl-dep to ensure this gets evaluated? assign add shoudl do right?
