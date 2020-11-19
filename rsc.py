@@ -3,6 +3,7 @@ import numpy as np
 from tensorflow import keras as keras
 from tensorflow.keras import layers
 import importlib
+from tensorflow.keras.datasets import mnist
 
 ###############################################################################
 #  DATA
@@ -100,7 +101,10 @@ def broadcast_label(data, dim=1):
 def get_data():
     training_data, test_data = get_titanic_dataset()    
     
-    
+def get_mnist():
+    (x_train, y_train), (x_test, y_test) = mnist.load_data()
+    return (x_train, y_train), (x_test, y_test)
+        
 ###############################################################################
 #  MODELS
 ###############################################################################
@@ -119,6 +123,40 @@ def get_model(data, type="default", metrics=[], callbacks=[], depth=4, out_feat=
     
     return model
     
+def get_model_slim():
+        
+    inputs = keras.Input(shape=(4,), name="model_input")
+    x = layers.Dense(3, activation="relu", name="dense_1")(inputs)
+    x = layers.Dense(3, activation="relu", name="dense_2")(x)
+    x = layers.Dense(2, activation="relu", name="dense_3")(x)
+    x = layers.Dense(2, activation="relu", name="dense_4")(x)
+    outputs = layers.Dense(units=2, activation="softmax", name="predictions")(x)
+
+    model = tf.keras.Model(inputs=inputs, outputs=outputs)
+    
+    return model    
+
+def get_model_mnist(data=None):
+    
+    model = tf.keras.Sequential([
+        tf.keras.layers.Flatten(input_shape=(28, 28)),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(10)])
+    
+    return model
+
+def get_model_unitlist(data=None, hidden_layers_spec=[128]):
+    
+    #using model.add() smoother
+    in_layer = [tf.keras.layers.Flatten(input_shape=(28,28))]
+    hidden_layers = [tf.keras.layers.Dense(width, activation='relu') for width in hidden_layers_spec]
+    out_layer = [tf.keras.layers.Dense(10)]
+    layers = in_layer + hidden_layers + out_layer
+    
+    model = tf.keras.Sequential(layers)
+    
+    return model
+        
 def get_functional_api_autoencoder():
     encoder_input = keras.Input(shape=(28, 28, 1), name="img")
     x = layers.Conv2D(16, 3, activation="relu")(encoder_input)
