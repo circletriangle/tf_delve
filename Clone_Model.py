@@ -3,8 +3,11 @@ from tensorflow import keras
 import numpy as np
 import SatLayer
 import importlib
+import tensorflow.keras.backend as K
+import SatFunctions
 
 importlib.reload(SatLayer)
+importlib.reload(SatFunctions)
 
 
 class mydense(keras.layers.Dense):
@@ -34,6 +37,7 @@ class mydense(keras.layers.Dense):
         Only after the weights are copied can variables/fields be added, because after adding to the layer
         set_weights() cannot align the signatures of the layers weights.
         ->Create sublayer with the outputshape as inputshape.
+        ->Create aggregator metric for the states (parallel approach to states in satlayer)
         """
     
         if "input_shape_build" in params.keys():
@@ -45,7 +49,10 @@ class mydense(keras.layers.Dense):
         
         if not self.weights==[]:
             self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))    
-
+        
+        features = output_shape[1]
+        self.sample_accum = Aggregator([(), (features), (features,features)], name="sample_count_"+str(self.name))
+            
     def __init__(self, custom_params=None, *args, **kwargs):
         """Inits basic dense object and extends it with process_params()"""
         super(mydense, self).__init__(*args, **kwargs) 
@@ -53,19 +60,17 @@ class mydense(keras.layers.Dense):
             self.process_params(custom_params)
         else:
             raise NameError("Extra Parameters not found!")    
-          
-            
-                    
+        
+                      
     def call(self, inputs):
-        """
-        Passes act. super().call() to sat_layer then returns it.
-        """    
+        """Passes act. super().call() to sat_layer then returns it."""    
         out = super().call(inputs)
-        #self.add_metric(tf.reduce_sum(out), name="my_placeholder_metric_"+self.name, aggregation='mean')
-        o, r, s, = self.sat_layer(out)
-        self.add_metric(o, name="observed_samples_sat_"+str(self.name), aggregation="mean")
-        #self.add_metric(self.sat_layer.result(), name="result_"+str(self.name) , aggregation="mean")
-        #print("out shp {} l: {}".format(self.name, out.get_shape()) )
+        
+        _o, _r, _s, = self.sat_layer(out)
+        o, r, s, = self.sat_layer.get_update_values(out)
+        
+        self.sample_accum.update_state(o)               
+        
         return out
         
     @classmethod 
@@ -78,13 +83,33 @@ class sat_results(keras.callbacks.Callback):
      
     def on_epoch_end(self, epoch, logs=None):
         for l in self.model.layers[1:]:
-            print("\nLayer {} sat_result: {}".format(l.name,l.sat_layer.result()))
-            print("Observed samples: {}".format(l.sat_layer.o_s.numpy()))
+            print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
+            if tf.executing_eagerly():
+                print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
+            print(f"Observed samples aggregator: {l.sample_accum.result()}")
             l.sat_layer.reset()
-            #print("Observed samples after reset: {}".format(l.sat_layer.o_s.numpy()))
-                    
-
-
+                
+class Aggregator(tf.keras.metrics.Metric):
+    """Aggregate by updating a state by a tensor. """
+    
+    def __init__(self, state_shapes=[], name=None, dtype=tf.float64):
+        super(Aggregator, self).__init__(name=name, dtype=dtype)
+        
+        self.states = [self.add_weight(name, 
+                                    shape=shape,  
+                                    dtype=dtype,
+                                    initializer=tf.keras.initializers.Zeros())
+                      for shape in state_shapes]
+        
+    def update_state(self, update_tensor):
+        return self.states[0].assign_add(update_tensor)
+    
+    def result(self):
+        return self.states[0]
+    
+    def reset_states(self):
+        assert False, "reset state aggregator"
+    
 def clone_fn(old_layer):
     """
     This function is to be passed to clone_model() and applied to each original layer,
