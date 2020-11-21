@@ -161,7 +161,7 @@ class sat_layer(keras.layers.Layer):
         self.r_s.assign_add(sum_over_batch)
         self.s_s.assign_add(sqr_inp)
         
-        #TODO return assign operations here!
+        #TODO return assign operations here? no i think returning a callable is meant for metrics
         return self.o_s, self.r_s, self.s_s 
                     
     def update(self, input_tensor):
@@ -175,6 +175,7 @@ class sat_layer(keras.layers.Layer):
         
         Soon Replaced by update_state() and get_update_values()
         TODO monitor/adjust shapes for different models/inputs esp. leading commas.
+        
         """
         
         shape=input_tensor.get_shape()#get_shape might fail
@@ -206,7 +207,7 @@ class sat_layer(keras.layers.Layer):
             (sqr_inp, (self.layer_width, self.layer_width))
         ])
         
-        tf.print(f"SATLAYER UPDATE: {input_tensor}")
+        #tf.print(f"SATLAYER UPDATE: {input_tensor}")
         #tf.print(f"SATLAYER UPDATE: {K.get_value(input_tensor)}")
         #TODO if assigns dont get executed return the assign operations themselves here
         #do i need ctrl-dep ok? assign add shoudl do right?
@@ -215,12 +216,13 @@ class sat_layer(keras.layers.Layer):
     def reset(self):
         """Reset the running states in the weights to initial value."""
         self.set_weights(self.inits)
-        print("RESET Weights!")
+        #print("RESET Weights!")
         
     def __call__(self, input, ):
         """Calls build() if weights/states not initialized. Could merge with update()"""
         if len(self.weights)==0:
             self.build(input)
+        self.add_metric(self.o_s, name="o_s_sl_metric", aggregation='mean')
         return self.update(input)
     
     def result(self):
@@ -228,8 +230,6 @@ class sat_layer(keras.layers.Layer):
         return self.sat(self.o_s, self.r_s, self.s_s)
   
     def show_states(self):
-        #for s in [self.o_s, self.r_s, self.s_s]:
-        #    print(f"Current {s.name} sat_layer: {s}")
         return [self.o_s, self.r_s, self.s_s]
 
 

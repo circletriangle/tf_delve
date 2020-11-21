@@ -67,8 +67,8 @@ class mydense(keras.layers.Dense):
         self.aggregators = {name : Aggregator(shape, name=name+str(self.name)) 
                             for name, shape in zip(self.states,shapes)}
         self.ag_metrics = [self.aggregators[state] for state in self.states]
-        print(self.states)
-            
+        self.ag_metrics_tpl = [(state, self.aggregators[state]) for state in self.states]
+        
     def __init__(self, custom_params=None, *args, **kwargs):
         """Init Dense Object and extend it with process_params()"""
         super(mydense, self).__init__(*args, **kwargs) 
@@ -95,7 +95,6 @@ class mydense(keras.layers.Dense):
         TODO add control_depencies to ensure sat_layer gets updates"""    
         out = super().call(inputs)
         
-        tf.print(f"ACT TENSOR DENSE.CALL: {out}")
         
         _o, _r, _s, = self.sat_layer(out)
         o, r, s, = self.sat_layer.get_update_values(out)
@@ -104,6 +103,10 @@ class mydense(keras.layers.Dense):
         self.aggregators['r_s'].update_state(r) 
         self.aggregators['s_s'].update_state(s)               
         
+        #tf.print(f"ACT TENSOR DENSE.CALL: {out}")
+        #for name, aggr in self.ag_metrics_tpl:
+            #self.model.metrics_names.append(self.name+name)
+            #self.model.metrics_tensors.append(aggr)   
         #_ = K.print_tensor(s, message="K.print_tensor() in call(/)")
         # add_metric() API won't let custom metric aggregate (Why is it not recognized as metrics.Metric subclass?)
         #aggr_try = Aggremetric(r, name="Agrmtrc")
@@ -112,6 +115,7 @@ class mydense(keras.layers.Dense):
         # keras refuses to not mean aggr here
         #self.add_metric(o, aggregation=tf.VariableAggregation.SUM, name="tf_aggregation")
         
+        #with tf.control_depencies([_o, _r, _s]):
         return out
         
 
@@ -140,24 +144,30 @@ class sat_results(keras.callbacks.Callback):
         for s in l.states:
             rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
         
+    #def on_train_begin(self, logs=None):
+        #for layer in self.model.layers[1:]:
+            #layer.add_metric(Aggremetric())
+            #layer.add_metric(layer.aggregators['r_s'], name="r_s_added_callb")    
         
     def on_batch_end(self, batch, logs=None):
         print(f"\nLogs from batch callback: {logs}")
+        print(f"\nK.GETVALUE o_s satlayer: {K.get_value(self.model.layers[1].sat_layer.o_s)}" )
         
     def on_epoch_end(self, epoch, logs=None):
         for l in self.model.layers[1:]:
             
+            print(f"\nEXECUTING-EAGERLY: {tf.executing_eagerly()}")
             print(f"\nLogs from epoch callback: {logs}")
             _ = K.print_tensor(l.sat_layer.r_s, message="\nK.print_tensor()\n")
-            #print(f"\nK.GETVALUE o_s satlayer: {K.get_value(l.sat_layer.o_s)}" )
+            print(f"\nK.GETVALUE o_s satlayer: {K.get_value(l.sat_layer.o_s)}" )
             #print(f"\nK.GETVALUE o_s aggregator: {K.get_value(l.aggregators['o_s'].state)}")
             #print(f"\nK EVAL satlayer result(): {K.eval(l.sat_layer.result())}" )
             
-            #self.layer_summary(l)
+            self.layer_summary(l)
             
             l.sat_layer.reset()
-            #for s in l.states:
-            #    l.aggregators[s].reset_state()
+            for s in l.states:
+                l.aggregators[s].reset_state()
          
 
 
@@ -202,7 +212,7 @@ class Aggregator(tf.keras.metrics.Metric):
         self.init_value = tf.zeros(shape=shape, dtype=dtype, name="aggr_init_"+name)
         
     def update_state(self, update_tensor):
-        tf.print(f"AGGREG UPDATESTATE() CALLED: {update_tensor}")
+        #tf.print(f"AGGREG UPDATESTATE() CALLED: {update_tensor}")
         return self.state.assign_add(update_tensor)
     
     def result(self):
@@ -247,16 +257,19 @@ def satify_model(model, compile_dict={}):
     #z_in = np.ones(shape=(20,4)) TODO get defined input shape
     #z_in = np.ones(shape=model.layers[0].input_shape[-2:])
     z_in = np.ones(shape=(1,28,28))
-    assert np.allclose(model.predict(z_in), clone.predict(z_in)), "Wrong: predictions don't match original"
+    assert np.allclose(model.predict(z_in), clone.predict(z_in)), "Cloned Model Predictions don't match Original!"
     
-    if not bool(compile_dict):
-        compile_dict = {
-            'optimizer': model.optimizer.__class__.__name__,
-            'loss': model.loss,
-            'metrics' : model.metrics,
-            'run_eagerly' : tf.executing_eagerly()
-        }    
-    clone.compile(**compile_dict)
+    
+    default_compile_dict = {
+        'optimizer': model.optimizer.__class__.__name__,
+        'loss': model.loss,
+        'metrics' : model.metrics,
+        'run_eagerly' : True
+    }    
+    #second dict overwrites conflicting default keys
+    merged_dict = {**default_compile_dict, **compile_dict}    
+        
+    clone.compile(**merged_dict)
     
     
     print("Clone_Model.satify_model() end.")
