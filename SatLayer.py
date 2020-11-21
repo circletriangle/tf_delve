@@ -71,7 +71,7 @@ class sat_layer(keras.layers.Layer):
         #TODO check if neccessary
         return self.lossless_k_loopless(evals)        
     
-    def sat(self, o_s, sum_sqrs, runn_sum):
+    def sat(self, o_s, runn_sum, sum_sqrs):
         """Compute Saturation given values (current or other) for the tracked states. Doesn't change states.
         
         Parameters: 
@@ -101,7 +101,7 @@ class sat_layer(keras.layers.Layer):
             k, ixs = self.lossless_k_loopless(eig_vals) #abs.val compl ev #tf.constant(4, dtype=tf.int32)
         else:
             k, ixs = self.ll_k_fun(eig_vals)
-        print("K tensor: {}".format(k))
+        #print("K tensor: {}".format(k))
 
         #PROJECTION MATRIX  TODO alt. tf.slice + tune indices (also for batches)
         k_eig_vecs = tf.gather(params=eig_vecs, indices=ixs , axis=0, batch_dims=1, name="k_eig_vecs") 
@@ -161,6 +161,7 @@ class sat_layer(keras.layers.Layer):
         self.r_s.assign_add(sum_over_batch)
         self.s_s.assign_add(sqr_inp)
         
+        #TODO return assign operations here!
         return self.o_s, self.r_s, self.s_s 
                     
     def update(self, input_tensor):
@@ -205,6 +206,9 @@ class sat_layer(keras.layers.Layer):
             (sqr_inp, (self.layer_width, self.layer_width))
         ])
         
+        tf.print(f"SATLAYER UPDATE: {input_tensor}")
+        #tf.print(f"SATLAYER UPDATE: {K.get_value(input_tensor)}")
+        #TODO if assigns dont get executed return the assign operations themselves here
         #do i need ctrl-dep ok? assign add shoudl do right?
         return self.o_s, self.r_s, self.s_s 
    
@@ -221,10 +225,12 @@ class sat_layer(keras.layers.Layer):
     
     def result(self):
         """Returns computed saturation based on current states."""
-        return self.sat(self.o_s, self.s_s, self.r_s)
+        return self.sat(self.o_s, self.r_s, self.s_s)
   
-
-
+    def show_states(self):
+        #for s in [self.o_s, self.r_s, self.s_s]:
+        #    print(f"Current {s.name} sat_layer: {s}")
+        return [self.o_s, self.r_s, self.s_s]
 
 
 

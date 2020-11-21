@@ -5,14 +5,15 @@ import SatLayer
 import importlib
 import tensorflow.keras.backend as K
 import SatFunctions
+import rsc
 
 importlib.reload(SatLayer)
 importlib.reload(SatFunctions)
-
+importlib.reload(rsc)
 
 class mydense(keras.layers.Dense):
     """
-    For cloning an existing layer (Dense) object and extending it by 
+    For cloning an existing layer (Dense) object and adding 
     a sublayer that computes the saturation metric.
     
     Additional parameters need to be passed to init() through from_config_params(). Those are:
@@ -23,6 +24,12 @@ class mydense(keras.layers.Dense):
     call() then passes each forward passes activation to the sat-sublayer before returning it.
     """    
     
+    @classmethod 
+    def from_config_params(cls, params, config):
+        """Extends from_config() functionality by passing extra arguments/parameters."""    
+        new = cls(custom_params=params, **config)
+        return new
+        
     def print_args(self, *args, **kwargs):
         for arg in args:    
             print("arg: {}".format(arg))
@@ -31,13 +38,14 @@ class mydense(keras.layers.Dense):
     
     def process_params(self, params):
         """
-        Aux. function of init() to process additional layer-information.
-        ->First build() needs the input shape.
-        ->After layer is built the weights can be set to init weights.
-        Only after the weights are copied can variables/fields be added, because after adding to the layer
-        set_weights() cannot align the signatures of the layers weights.
-        ->Create sublayer with the outputshape as inputshape.
-        ->Create aggregator metric for the states (parallel approach to states in satlayer)
+        Set layer weights from params (in order) before 
+        adding Fields that change the config-signature.
+        
+        1. build() needs input shape. 
+        2. init_weights can be set in built layer.
+        3. Add new fields (set_weights() can't take weights with old signature now)
+            3.1 Create saturation-sublayer with output_shape (track states, get saturation).
+            3.2 Create aggregators (track states) (metrics not added to layer)
         """
     
         if "input_shape_build" in params.keys():
@@ -51,64 +59,160 @@ class mydense(keras.layers.Dense):
             self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))    
         
         features = output_shape[1]
-        self.sample_accum = Aggregator([(), (features), (features,features)], name="sample_count_"+str(self.name))
+        self.states = ['o_s', 'r_s', 's_s']
+        shapes = [(),(features),(features,features)]
+        self.features = tf.dtypes.cast(features, dtype=tf.float64)
+
+        #InfoA mit names :)
+        self.aggregators = {name : Aggregator(shape, name=name+str(self.name)) 
+                            for name, shape in zip(self.states,shapes)}
+        self.ag_metrics = [self.aggregators[state] for state in self.states]
+        print(self.states)
             
     def __init__(self, custom_params=None, *args, **kwargs):
-        """Inits basic dense object and extends it with process_params()"""
+        """Init Dense Object and extend it with process_params()"""
         super(mydense, self).__init__(*args, **kwargs) 
         if custom_params:
             self.process_params(custom_params)
         else:
             raise NameError("Extra Parameters not found!")    
-        
-                      
+            
+    @property
+    def sat_states(self):
+        """Should be part of logs that are passed to batch callbacks?
+        Without being processed by keras.""" 
+        return self.ag_metrics       
+            
+    @property
+    def metrics(self):
+        """Trying to get our not added() metrics into metrics-list.
+        Scalar metric gets into metrics-list but not history.h.keys() ~kinda hacky
+        TODO keras tries to set the non scalar matrices to 0 no broadcasting."""
+        return [self.ag_metrics[0]]        
+                            
     def call(self, inputs):
-        """Passes act. super().call() to sat_layer then returns it."""    
+        """Pass activation to sat_layer/aggregators and return it.
+        TODO add control_depencies to ensure sat_layer gets updates"""    
         out = super().call(inputs)
+        
+        tf.print(f"ACT TENSOR DENSE.CALL: {out}")
         
         _o, _r, _s, = self.sat_layer(out)
         o, r, s, = self.sat_layer.get_update_values(out)
         
-        self.sample_accum.update_state(o)               
+        self.aggregators['o_s'].update_state(o) 
+        self.aggregators['r_s'].update_state(r) 
+        self.aggregators['s_s'].update_state(s)               
+        
+        #_ = K.print_tensor(s, message="K.print_tensor() in call(/)")
+        # add_metric() API won't let custom metric aggregate (Why is it not recognized as metrics.Metric subclass?)
+        #aggr_try = Aggremetric(r, name="Agrmtrc")
+        #self.add_metric(aggr_try, name="ajsdfklas")
+        #-> try adding normal aggregators to metrics()
+        # keras refuses to not mean aggr here
+        #self.add_metric(o, aggregation=tf.VariableAggregation.SUM, name="tf_aggregation")
         
         return out
         
-    @classmethod 
-    def from_config_params(cls, params, config):
-        """Extends from_config() functionality by passing extra arguments/parameters."""    
-        new = cls(custom_params=params, **config)
-        return new
-        
+
 class sat_results(keras.callbacks.Callback):
-     
+    
+    def layer_summary(self, layer):
+        """For Debugging NOT for saving/logging. maybe move to rsc"""
+        l = layer
+        print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
+        if tf.executing_eagerly(): print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
+        for name in l.states: 
+            print(f"{name} aggregator: {tf.shape(l.aggregators[name].result())}")
+        
+        aggrs = [l.aggregators[name] for name in l.states]
+        aggr_values = [aggr.result() for aggr in aggrs]
+        layer_values = l.sat_layer.show_states()
+        aggr_sat = SatFunctions.get_sat(l.features, *aggr_values, delta=0.99)
+        l_sat = l.sat_layer.result()
+        l_sat_ag = l.sat_layer.sat(*aggr_values)
+        print(f"Sublayer-sat from sublayer_vals: {l_sat}")
+        print(f"Sublayer-sat from aggr_vals: {l_sat_ag}")
+        print(f"SatFunctions-sat from aggr_vals: {aggr_sat}")
+        
+        #Compare states
+        val_dict = {n : vals for n, vals in zip(l.states, zip(layer_values, aggr_values))}
+        for s in l.states:
+            rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
+        
+        
+    def on_batch_end(self, batch, logs=None):
+        print(f"\nLogs from batch callback: {logs}")
+        
     def on_epoch_end(self, epoch, logs=None):
         for l in self.model.layers[1:]:
-            print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
-            if tf.executing_eagerly():
-                print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
-            print(f"Observed samples aggregator: {l.sample_accum.result()}")
+            
+            print(f"\nLogs from epoch callback: {logs}")
+            _ = K.print_tensor(l.sat_layer.r_s, message="\nK.print_tensor()\n")
+            #print(f"\nK.GETVALUE o_s satlayer: {K.get_value(l.sat_layer.o_s)}" )
+            #print(f"\nK.GETVALUE o_s aggregator: {K.get_value(l.aggregators['o_s'].state)}")
+            #print(f"\nK EVAL satlayer result(): {K.eval(l.sat_layer.result())}" )
+            
+            #self.layer_summary(l)
+            
             l.sat_layer.reset()
+            #for s in l.states:
+            #    l.aggregators[s].reset_state()
+         
+
+
+class Aggremetric(tf.keras.metrics.Metric):
+    """Try version of aggregator that is used by add_metric in call() and tracked."""
+    
+    def __init__(self, input, name=None, dtype=tf.float64):
+        super(Aggremetric, self).__init__(name=name, dtype=dtype)
+        
+        self.shape = K.int_shape(input)
+        self.init = tf.keras.initializers.Zeros()
+        self.value = self.add_weight("aggremetric_state",
+                                     shape=self.shape,
+                                     dtype=tf.float64,
+                                     initializer=self.init) 
                 
+    def update_state(self, y_true, y_pred, sample_weights=None):
+        return self.value.assign_add(y_true)
+    
+    def update_state(self, update_tensor):
+        return self.value.assign_add(update_tensor)
+    
+    def reset_state(self):
+        return self.value.assign(self.init(self.shape))
+    
+    def result(self):
+        return self.value    
+                              
 class Aggregator(tf.keras.metrics.Metric):
     """Aggregate by updating a state by a tensor. """
     
-    def __init__(self, state_shapes=[], name=None, dtype=tf.float64):
+    def __init__(self, shape, name=None, dtype=tf.float64):
+        """Track/update one state."""
         super(Aggregator, self).__init__(name=name, dtype=dtype)
         
-        self.states = [self.add_weight(name, 
+        #self.init = tf.keras.initializers.Zeros()
+        #self.shape = shape
+        self.state = self.add_weight("aggr_state_"+name, 
                                     shape=shape,  
                                     dtype=dtype,
                                     initializer=tf.keras.initializers.Zeros())
-                      for shape in state_shapes]
+        self.init_value = tf.zeros(shape=shape, dtype=dtype, name="aggr_init_"+name)
         
     def update_state(self, update_tensor):
-        return self.states[0].assign_add(update_tensor)
+        tf.print(f"AGGREG UPDATESTATE() CALLED: {update_tensor}")
+        return self.state.assign_add(update_tensor)
     
     def result(self):
-        return self.states[0]
+        return self.state
     
-    def reset_states(self):
-        assert False, "reset state aggregator"
+    
+    def reset_state(self):
+        return self.state.assign(self.init_value)
+        #K.set_value(self.state, self.init_value)
+    
     
 def clone_fn(old_layer):
     """
@@ -134,8 +238,6 @@ def clone_fn(old_layer):
         print(old_layer.__class__)
         return old_layer.__class__.from_config(old_layer.get_config())
     
-
-
 def satify_model(model, compile_dict={}):
     
     assert model.output_shape, "Output Shape not defined! (Call model to build)"

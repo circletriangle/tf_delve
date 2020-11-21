@@ -180,3 +180,45 @@ def get_functional_api_autoencoder():
     autoencoder.summary()
 
     
+###############################################################################
+#  UTILS
+###############################################################################
+
+def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
+    
+    print(f"\nComparing {name1} and {name2}:\n")
+    
+    shapes = [tf.shape(t1), tf.shape(t2)]
+    print(f"Shape {name1}: {shapes[0]}\nShape {name2}: {shapes[1]}")
+    
+    equal_elements = tf.math.equal(t1, t2) 
+    all_equal = tf.math.reduce_all(equal_elements, axis=None)
+    if tf.executing_eagerly(): print(f"Tensors equal -> {str(all_equal.numpy())}")
+    
+    diff = t1 - t2 #Not abs() 
+    diff_rsum = tf.math.reduce_sum(diff, axis=None)
+    diff_rsum_avg = diff_rsum / tf.size(t1, out_type=tf.dtypes.float64)
+    print(f"Mean Difference of elements: {diff_rsum_avg}")
+    
+    diff_ratio1 = tf.math.abs(diff / t1)
+    diff_ratio2 = tf.math.abs(diff / t2)
+    diff_ratio_avg1 = tf.math.reduce_sum(diff_ratio1, axis=None) / tf.size(t1, out_type=tf.dtypes.float64)
+    diff_ratio_avg2 = tf.math.reduce_sum(diff_ratio2, axis=None) / tf.size(t2, out_type=tf.dtypes.float64)
+    print(f"Avg Ratio Diff/Value of {name1} elements: {diff_ratio_avg1}")
+    print(f"Avg Ratio Diff/Value of {name2} elements: {diff_ratio_avg2}")
+    max_diff_ratio1 = tf.math.reduce_max(diff_ratio1, axis=None)
+    max_diff_ratio2 = tf.math.reduce_max(diff_ratio2, axis=None)
+    print(f"Max Ratio Diff/Value {name1}: {max_diff_ratio1}")
+    print(f"Max Ratio Diff/Value {name2}: {max_diff_ratio2}") #check argmax?
+    
+    print("\n\n")
+    #TODO add range of diff, isequal, hash, rsum, dtype, head,...
+    
+def compare_tensor_lists(l1, l2, names1=None, names2=None):
+    #Untested
+    if names1 and names2:
+        for t1, t2, n1, n2 in zip(l1, l2, names1, names2):
+            compare_tensors(t1, t2, n1, n2)
+    else:
+        for t1, t2 in zip(l1, l2):
+            compare_tensors(t1, t2)   
