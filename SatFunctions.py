@@ -5,6 +5,7 @@ import numpy as np
 
 #TODO check where s_s come before r_s and fix it 
 def get_cov_mat(o_s, runn_sum, sum_sqrs):
+    """Sample Covariance-Matrix Approximation based on naive """
     
     #SAMPLE MEAN 
     sample_mean = tf.realdiv(runn_sum, o_s, name='sample_mean') #alt tf.math.scalar_mul()
@@ -111,3 +112,47 @@ def get_update_values(self, input_tensor):
     
     return batch_size, sum_over_batch, sqr_inp
 
+def two_pass_cov(activations):
+    """From list of batch-activations of one epoch compute
+    feature covariance matrix with the two-pass-algorithm.
+    Sum( (x - x_mean)(y - y_mean) ) / N
+    TODO test both final steps divided and in one
+    TODO test -> dims stimmen
+    TODO timeit
+    TODO compare to naive algorithm covmat
+    #should pass activations as one big numpy array sth. to_tensor bug slow
+        
+    """
+    #activations = tf.convert_to_tensor(np.asanyarray(activations))
+    #print(f"")
+    batch_shape = activations[0].shape
+    epoch_activations = tf.concat(activations, axis=0) #one big batch-dim
+    print(f"epoch_activations: {epoch_activations.get_shape()}")
+    N = tf.dtypes.cast(epoch_activations.shape[0], dtype=tf.float64)
+    print(f"N: {N}")
+    
+    total_sum = tf.reduce_sum(epoch_activations, axis=0)
+    total_mean = total_sum / N
+    print(f"total_mean: {total_mean.get_shape()}")
+    
+    #probably more memory efficient to still do sum of squares
+    #divided in batches? try it^^
+    broadcast_mean = tf.broadcast_to(total_mean, batch_shape)
+    epoch_batches = tf.stack(activations, axis=0)
+    print(f"epoch_batches: {epoch_batches.get_shape()}")
+    norm_batches = epoch_batches -  broadcast_mean #still broadcast again, just do it implicitly
+    square_batches = tf.map_fn(fn=lambda m: tf.linalg.matmul(m,m,transpose_a=True) / N, elems=norm_batches)
+    print(f"square_batches: {square_batches.get_shape()}")
+    mean_square = tf.math.reduce_sum(square_batches, axis=0)
+    #cov_mat = tf.linalg.matmul(norm_batches, norm_batches, transpose_a=True) / N
+    cov_mat_from_batches = mean_square
+    
+    #return cov_mat_from_batches 
+    
+    #Without batches
+    norm_epoch = epoch_activations - total_mean #should broadcast over sample-dim
+    cov_mat_from_epoch = tf.linalg.matmul(norm_epoch, norm_epoch, transpose_a=True) / N
+    
+    #return cov_mat_from_epoch
+    
+    return cov_mat_from_batches, cov_mat_from_epoch

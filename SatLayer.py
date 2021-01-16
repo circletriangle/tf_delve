@@ -16,18 +16,65 @@ to be used by Clone_Model extended Layers as sublayer
 """
 
 
-
 class sat_layer(keras.layers.Layer):
     """
-    TODO maybe convert to keras metric now that injection is done?
-    Intended Sublayer of Clone_Model.mydense Layers to compute the Saturation of the Layer. 
-    Functions update/reset/result like keras metric (but not treated as a metric object).
-    Tracks three states with update() of "Parent-layer"-activation in forward-pass, and reset() at epoch-end: 
-    -Number of observed samples 
-    -Running Sum (of activations) (NOT Running Mean, that's only computed when needed in sat())
-    -Sum of Squares 
-    """
+    Sublayer of Clone_Model.mydense Layers to compute Layer-Saturation and related Metrics,
+    by updating three states with Parent-layers (batch-)activation in forward-pass
+    ...
     
+        Attributes
+        ---------- 
+        o_s : keras Weight 
+            [scalar] Number of observed samples 
+        r_s : keras Weight
+            [Features] Running Sum of activations (NOT Running Mean, that's only computed when needed in sat())
+        s_s : keras Weight 
+            [Features X Features] Sum of Squares of activations
+        delta : tensorflow Variable/Node
+            [scalar] delta value used as threshold of ratio of used Eigenvalues to total Variance
+        layer_width(_tensor) : str (or tf.constant)
+            number of units of (dense) Parent-layer. 
+        inits : list
+            zero values to initialize and reset layer weights (states) with
+        current_activation : keras Weight
+            Is assigned each batches activation(/input)-tensor for logging/saving intermediate activations with model.save / Checkpoint callback               
+            
+        Methods
+        -------
+        __call__(input)
+            For each batch/forward pass call update() and when weights not created build(); 
+            can add metrics (eg.logging states) here ~>meh with the accumulation   
+        build(input)    
+            create state-weights and inits then calls reset() to initialize them
+        update(input_tensor)
+            computes update-values from input_tensor and adds them to state-weights
+        get_update_values(input_tensor)
+            compute and return update-values from input_tensor without sideeffects (updating states)
+        update_state(batch_size, sum_over_batch, sqr_inp)
+            update state-weights with precomputed update-values
+        reset()
+            sets the three state-weights to zero using inits
+        result()
+            returns value for saturation by calling sat() with current state of state-weights
+        show_states()
+            returns list of current values of state-weights (external query to observe and check process)
+        sat(o_s, runn_sum, sum_sqrs)
+            compute and return a saturation from the given states
+        lossless_k_loopless(evals)
+            from a list of eigenvalues (largest first) finds number k of corresponding eigenvectors 
+            necessary to span a ~~~lossless subspace~~~ without iterating over the list to avoid a branching tf graph.          
+        ll_k_fun(evals)
+            wraps lossless_k_loopless() as a tf.function            
+                
+        TODO check if this should have set dynamic=True because i manipulate tensors with python?    
+        TODO probably just outsource all non-stateful functions to SatFunctions.py     
+        TODO check for abnormally sized batches and either skip or find solution for the dim-change    
+        TODO wrap get_update_values(), update_state() into update() to use independent of classes updates (eg.sanity testing)               
+        TODO add definition of layer_width for conv version of class  
+        TODO debug functionality! @tf.function ll_k()? -> test both options! correct values? 
+        TODO make process efficient (GPU, DistributeStrategy, no internal tf/keras bottlenecks -> tf.Profiler)    
+        TODO ensure states are tf.Strategy.reduce()d (sum) over all replicas before computing saturation when training distributetly
+    """
     
     def lossless_k_loopless(self, evals):
         """Determine minimal number k (+1) of largest evals neccessary for spanning a 
@@ -53,7 +100,7 @@ class sat_layer(keras.layers.Layer):
         cum_evs = tf.cumsum(s_evs, axis=0, name="cumsum_evals") 
         #print("Cumulating EVs: {}".format(cum_evs))
         
-        #Divide Cum.sums by total sum of EVs (trace(CovMat) ~ variance of CovMat)
+        #Divide Cum.sums by total sum of EVs (trace(CovMat) ~> variance of CovMat)
         dim_ratios = tf.realdiv(cum_evs, cum_evs[-1], name="div_by_trace")
         #print("Dim ratios: {}".format(dim_ratios))
         
@@ -72,14 +119,39 @@ class sat_layer(keras.layers.Layer):
         return self.lossless_k_loopless(evals)        
     
     def sat(self, o_s, runn_sum, sum_sqrs):
-        """Compute Saturation given values (current or other) for the tracked states. Doesn't change states.
+        """
+        Computes Saturation from any given values for the three states. 
+        Doesn't depend on or affect SatLayer states/members.
         
-        Parameters: 
-        o_s (scalar-shape tensor), sum_sqrs (shape(FxF) tensor), runn_sum (shape(F) tensor) : Given states
+        Parameters
+        ---------- 
+        o_s : tf.Tensor / tf.Variable / keras Weight 
+            Tensor of shape (1,) containing the scalar count of observed samples 
+        runn_sum : tf.Tensor / tf.Variable / keras Weight
+            Tensor of shape (F) containing the running sums of activations of single units/features
+        sum_sqrs : tf.Tensor / tf.Variable / keras Weight
+            Tensor of shape (FxF) containing the sums of products of pairs of 
+            features/units(' column/row vectors of activation-tensor along the batch-dimension) 
+            
+            That is equivalent to summing the 'o_s' many squares 'shape(F X F)' of all observed
+            feature-activations/activation-vectors 'shape(F)' for single samples all at once 
+            as if they were "one batch".
+            The Squaring-and-then-Summing of of all the single-samples' feature-activations is only
+            split up and performed "batchwise" in the form of matrix-squaring (matmul w itself) 
+            the activation-tensor of the minibatch so the batch dimension is the inner one getting 
+            reduced, (F X B) o (B X F) resulting in a (F X F) tensor where each element (i,j) 
+            is the sum of all products of scalar (single-sample, single-)feature activations 
+            of the features i,j over all samples in the batch.
+            Computing the Sum of Squares as a sum of sub-solutions sequentially while training 
+            on each batch requires neither that all squares be loaded into memory at once or centrally
+            nor to transform the form the data has before applying an operation, which in this case
+            is one that can be naturally performed by the same hardware as the training (is taking place on?)
+            (Intermediate solutions that remain in memory to be used further eg. combining/reducing is dynamic programming right?)
         
         Returns:
         scalar-shape tensor: saturation 
         TODO use separate SatFunctions 
+        TODO after tinkering outsource to SatFunctions? since it is static
         """    
         
         #SAMPLE MEAN (from running sum of features and running sample count) (Not computed every batch)
@@ -123,18 +195,33 @@ class sat_layer(keras.layers.Layer):
         self.layer_width=input_shape[1:]
         self.layer_width_tensor=tf.constant(input_shape[1:], dtype=tf.float64)
         self.delta = tf.dtypes.cast(delta, dtype=tf.float64)
+        self.act_shape=()
         
-    def build(self, input):
-        """From shape of input_tensor create initial values of tracked states (keras-weights)
-        to be used in reset() and calls it. TODO shift to init use layer_width for shapes"""        
-        input_shape = K.int_shape(input)
-        self.inits=[np.zeros(shape=(None)), 
+    def build(self, input_shape):
+        """
+        From input shape create init-values, tracked-states and current_activation 
+        (whole batch) as keras-weights and reset(). 
+        TODO pass input_shape here
+        TODO use layer_width for init shapes instead of the input-tensor
+        """        
+        
+        #input_shape = K.int_shape(input)
+        print(f"input_shape: {input_shape}")
+        #print(f"input.get_shape(): {input.get_shape().as_list()}")
+        print(f"layer_width: {self.layer_width}")
+        #maybe need to use np.dtype==float64 hier schon sonst wird das beim casten ungenau! TODO
+        #fehler von o_s ist pro layer zwischen batches gleich! dh. die initwerte sind das Problem!!
+        self.inits=[np.zeros(shape=(1,), dtype=np.float64), 
                     np.zeros(shape=input_shape[1:]), 
-                    np.zeros(shape=input_shape[1:]*2)]
+                    np.zeros(shape=input_shape[1:]*2),
+                    np.zeros(shape=(10, *self.layer_width))]
         
-        self.o_s = self.add_weight(shape=(None), name="o_s", dtype=tf.float64, trainable=False)
-        self.r_s = self.add_weight(shape=self.inits[1].shape, name="r_s", dtype=tf.float64, trainable=False)       
-        self.s_s = self.add_weight(shape=self.inits[2].shape, name="s_s", dtype=tf.float64, trainable=False)
+        self.o_s = self.add_weight(shape=self.inits[0].shape, name="o_s", initializer='zeros', dtype=tf.float64, trainable=False)
+        self.r_s = self.add_weight(shape=self.inits[1].shape, name="r_s", initializer='zeros', dtype=tf.float64, trainable=False)       
+        self.s_s = self.add_weight(shape=self.inits[2].shape, name="s_s", initializer='zeros', dtype=tf.float64, trainable=False)
+        self.current_activation = self.add_weight(shape=self.inits[3].shape, name="curr_act", initializer='zeros', dtype=tf.float64, trainable=False)
+        
+        self.built = True
         self.reset()
     
     def get_update_values(self, input_tensor):
@@ -166,38 +253,54 @@ class sat_layer(keras.layers.Layer):
                     
     def update(self, input_tensor):
         """
-        Assumes input_tensor has shape (Batchsize X Features) and updates the three
-        tracked states given the activation of the parent-layer as input_tensor:
-        -Batchsize (scalar) is added to Number of observed samples.
-        -Input_tensor summed over batch-dimension (shape F) is added to running_sum (of feature activations?)
-        -Sqr_inp acquired by matmuling input_tensor with itself and batch-dim as inner dim. 
-            -> gives (shape FxF) matrix that should? have summed over the batch-dim implicitly and is added to sum_squares.
-        
-        Soon Replaced by update_state() and get_update_values()
-        TODO monitor/adjust shapes for different models/inputs esp. leading commas.
-        
+            From input_tensor shape(Batchsize X Features) of parent-layer activation 
+            updates three tracked states:
+                
+            -observed samples (Counter) += Batchsize (scalar)
+            -running_sum (of feature activations) += Input_tensor summed over batch-dim (shape F)
+            -sum_sqrs +=  Squared input (matmul input_tensor with itself, batch-dim as inner dim) (shape FxF) 
+                (-> should have summed over the batch-dim implicitly~?.)
+            
+            Parameters
+            ----------
+            input_tensor : keras Tensor
+                Data?tensor shape(Batchsize X Features) of Parentlayers batch-activation
+
+            
+            Soon Replaced by update_state() and get_update_values()? Wrap them?~ better leave this working.
+            TODO monitor/adjust shapes for different models/inputs esp. leading commas.
+            TODO raise Error when input_tensor has wrong shape / or pass for dry runs?
+            TODO catch smaller batches when saving/assigning the batch-activation by padding with NA?
+            -> or use list that creates/appends a new variable, everytime a new batchsize appears? no priority 
         """
+        input_tensor = tf.dtypes.cast(input_tensor, tf.float64)    
+        shape=input_tensor.get_shape() #get_shape might fail
         
-        shape=input_tensor.get_shape()#get_shape might fail
-        #print("SatLayer.update(): Input tensor has shape: {}".format(shape))
+        #print(f"input_tensor: {input_tensor}")
+        #print(f"shape: {shape}")
+        #print(f"batchsize: {shape[0]}")
+        #print(f"o_s: {self.o_s.shape}")
         
         #OBSERVED SAMPLES
-        batch_size = shape[0] 
-        if not batch_size:
-            batch_size=(0.)
-        self.o_s.assign_add(batch_size) #add batchsize
+        batch_size = [shape[0]] 
+        if batch_size == [None]:
+            batch_size = [0.]
+        self.o_s.assign_add(batch_size) 
         
         #RUNNING SUM
-        input_tensor = tf.dtypes.cast(input_tensor, dtype=tf.float64)
         sum_over_batch = tf.reduce_sum(input_tensor, axis=0)
-        self.r_s.assign_add(sum_over_batch) #add sum over batch
+        self.r_s.assign_add(sum_over_batch)
         
         #SUM OF SQUARES
-        sqr_inp = tf.linalg.matmul(input_tensor, input_tensor, transpose_a=True) 
-        self.s_s.assign_add(sqr_inp) #add sqr of batch inp
+        sqr_inp = tf.linalg.matmul(input_tensor, input_tensor, transpose_a=True)
+        self.s_s.assign_add(sqr_inp)
         """((FIRST SQUARE THEN REDUCESUM OVER BATCH: B X F -> B X F X F -> F X F))?
         ->No that happens automatically when squaring the matrix i think ~TODO"""
         
+        #LOGGING THE BATCH-ACTIVATION
+        if batch_size != [None]:
+            self.current_activation.assign(input_tensor)
+                
         tf.debugging.assert_shapes([
             (input_tensor, (None, self.layer_width)),
             (self.o_s, ()),
@@ -207,24 +310,29 @@ class sat_layer(keras.layers.Layer):
             (sqr_inp, (self.layer_width, self.layer_width))
         ])
         
-        #tf.print(f"SATLAYER UPDATE: {input_tensor}")
-        #tf.print(f"SATLAYER UPDATE: {K.get_value(input_tensor)}")
-        #TODO if assigns dont get executed return the assign operations themselves here
-        #do i need ctrl-dep ok? assign add shoudl do right?
         return self.o_s, self.r_s, self.s_s 
    
     def reset(self):
-        """Reset the running states in the weights to initial value."""
+        """Reset the tracked states in the weights to initial value.
+        https://github.com/keras-team/keras/issues/341  <- reset keras weights (very different)
+        TODO broadcast to all replicas when distributed."""
         self.set_weights(self.inits)
-        #print("RESET Weights!")
         
     def __call__(self, input, ):
-        """Calls build() if weights/states not initialized. Could merge with update()"""
+        """Calls build() if weights/states not initialized. 
+        TODO Merge with update()? ~wrapping it like now is readable and modular"""
+        #self.add_metric(self.o_s, name="o_s_sl_metric", aggregation='mean')
+        
         if len(self.weights)==0:
-            self.build(input)
-        self.add_metric(self.o_s, name="o_s_sl_metric", aggregation='mean')
+            self.build(input.get_shape().as_list()) #TODO get shape right here
         return self.update(input)
     
+    def call(self, inputs, training=None):
+        """this should be called by __call__() (egal weil kein gradient wrsl) and can check if training."""
+        if training:
+            return self.update(inputs)
+        return
+            
     def result(self):
         """Returns computed saturation based on current states."""
         return self.sat(self.o_s, self.r_s, self.s_s)
@@ -232,6 +340,48 @@ class sat_layer(keras.layers.Layer):
     def show_states(self):
         return [self.o_s, self.r_s, self.s_s]
 
+    def get_states(self):
+        return self.o_s, self.r_s, self.s_s, self.current_activation
 
+class log_layer(keras.layers.Layer):
+    
+    def __init__(self, input_shape, dtype=None, log_targets=["ACT"], name=None, **kwargs):
+        """Logs intermediate activation without casting to another dtype."""
+        super(log_layer, self).__init__(name=name, **kwargs)
+        self.log_targets = log_targets
+        shape=input_shape
+        self.activation = tf.Variable(shape=shape,
+                                      initial_value=np.zeros(shape=(1,)+shape[1:],dtype=np.float64),
+                                      validate_shape=False,
+                                      dtype=dtype,
+                                      trainable=False)
+        
+    def build(self, input_shape):
+        pass
+        """self.activation = tf.Variable(#shape=(1)+input_shape[1:],
+                                      initial_value=np.zeros(shape=[1]),
+                                      dtype=tf.float64,
+                                      validate_shape=False,
+                                      trainable=False)
+                                      #TensorSpec=(None))
+        #self.activation.assign(np.zeros())
+        """
+        
+    def update(self, activation):
+        
+        #activation = tf.dtypes.cast()
+        #print(f"act.dtype= {activation.dtype} \nself.act.dtype= {self.activation.dtype}")
+        self.activation.assign(activation) #, validate_shape=False)
+    
+        return activation 
 
-
+    def reset(self):
+        pass
+        #self.activation.assign(np.zeros(shape=(1,)))    
+    
+    def call(self, activation):
+        """in this class the argument is called activation not input_tensor."""
+        return self.update(activation)
+    
+    #ideally not overwrite that function
+    #def __call__(self, input):

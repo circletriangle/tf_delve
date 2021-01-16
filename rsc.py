@@ -105,6 +105,28 @@ def get_mnist():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
     return (x_train, y_train), (x_test, y_test)
         
+def get_cifar10():
+    """
+    #https://www.tensorflow.org/datasets/catalog/cifar10 <- tf link not keras 
+    Dataset of 50,000 32x32 color training images and 10,000 test images, labeled over 10 categories
+    Tuple of Numpy arrays: (x_train, y_train), (x_test, y_test).
+    x_train, x_test: uint8 arrays of RGB image data with 
+     shape (num_samples, 3, 32, 32) if tf.keras.backend.image_data_format() is 'channels_first', 
+     or (num_samples, 32, 32, 3) if the data format is 'channels_last'.
+    y_train, y_test: uint8 arrays of category labels (integers in range 0-9) each with shape (num_samples, 1).
+    """
+    
+    (x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()      
+    
+    # Cast to float64 and normalize values to [0,1] 255?
+    x_train, x_test = x_train.astype('float64') / 256, x_test.astype('float64') / 256   
+    
+    # in keras example out-layer Dense(10) works with class-vectors without 
+    # one-hot/to_categorical encoding? + Casting to float64? TODO
+    #y_train, y_test = tf.keras.utils.to_categorical(y_train, num_classes=10, dtype='uint8') 
+    
+    return (x_train, y_train), (x_test, y_test)
+        
 ###############################################################################
 #  MODELS
 ###############################################################################
@@ -206,6 +228,7 @@ def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
     diff_ratio_avg2 = tf.math.reduce_sum(diff_ratio2, axis=None) / tf.size(t2, out_type=tf.dtypes.float64)
     print(f"Avg Ratio Diff/Value of {name1} elements: {diff_ratio_avg1}")
     print(f"Avg Ratio Diff/Value of {name2} elements: {diff_ratio_avg2}")
+    #TODO change to Avg Ratios Diff/{name1}, Diff/{name2}: {diff_ratio_avg1}, {diff_ratio_avg2}
     max_diff_ratio1 = tf.math.reduce_max(diff_ratio1, axis=None)
     max_diff_ratio2 = tf.math.reduce_max(diff_ratio2, axis=None)
     print(f"Max Ratio Diff/Value {name1}: {max_diff_ratio1}")
@@ -213,6 +236,7 @@ def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
     
     print("\n\n")
     #TODO add range of diff, isequal, hash, rsum, dtype, head,...
+    #TODO plot matrix of diffs, ratios etc. (heatmap eg)
     
 def compare_tensor_lists(l1, l2, names1=None, names2=None):
     #Untested

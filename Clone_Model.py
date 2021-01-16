@@ -6,10 +6,12 @@ import importlib
 import tensorflow.keras.backend as K
 import SatFunctions
 import rsc
+import SatCallbacks
 
 importlib.reload(SatLayer)
 importlib.reload(SatFunctions)
 importlib.reload(rsc)
+importlib.reload(SatCallbacks)
 
 class mydense(keras.layers.Dense):
     """
@@ -55,17 +57,23 @@ class mydense(keras.layers.Dense):
         if "output_shape" in params.keys():
             output_shape = params["output_shape"]
         
+        #Add Sublayers
         if not self.weights==[]:
-            self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))    
+            self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))
+            self.log_layer = SatLayer.log_layer(input_shape=output_shape, dtype=self.dtype, name="log_l_"+str(self.name))    
         
         features = output_shape[1]
         self.states = ['o_s', 'r_s', 's_s']
         shapes = [(),(features),(features,features)]
         self.features = tf.dtypes.cast(features, dtype=tf.float64)
 
+
         #InfoA mit names :)
         self.aggregators = {name : Aggregator(shape, name=name+str(self.name)) 
                             for name, shape in zip(self.states,shapes)}
+        
+        
+        #TODO remove
         self.ag_metrics = [self.aggregators[state] for state in self.states]
         self.ag_metrics_tpl = [(state, self.aggregators[state]) for state in self.states]
         
@@ -95,15 +103,15 @@ class mydense(keras.layers.Dense):
         TODO add control_depencies to ensure sat_layer gets updates"""    
         out = super().call(inputs)
         
-        
         _o, _r, _s, = self.sat_layer(out)
         o, r, s, = self.sat_layer.get_update_values(out)
+        
+        _ = self.log_layer(out)
         
         self.aggregators['o_s'].update_state(o) 
         self.aggregators['r_s'].update_state(r) 
         self.aggregators['s_s'].update_state(s)               
         
-        #tf.print(f"ACT TENSOR DENSE.CALL: {out}")
         #for name, aggr in self.ag_metrics_tpl:
             #self.model.metrics_names.append(self.name+name)
             #self.model.metrics_tensors.append(aggr)   
@@ -120,7 +128,26 @@ class mydense(keras.layers.Dense):
         
 
 class sat_results(keras.callbacks.Callback):
-    
+    """
+    Callback that accesses SatLayer values to log saturation
+    and reset SatLayer states (!)
+
+    TODO just pass a nested dict as argument for all the options~?
+    TODO  
+    TODO add all logging/plotting options in this callback
+    """
+
+    def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
+        super(sat_results, self).__init__()
+        self.batch_count = 0
+        self.batch_intervall = batch_intervall
+        self.log_targets = log_targets
+        self.log_destinations = dict.fromkeys(log_destinations, None)
+        
+        #self._chief_worker_only = True ?
+        #if "TB" in log_destinations.keys:
+        #    self.log_destinations["TB"] = tf.summary.create_file_writer(logdir="./cloning_eager_dis/logs/tb/sat/")
+
     def layer_summary(self, layer):
         """For Debugging NOT for saving/logging. maybe move to rsc"""
         l = layer
@@ -144,33 +171,36 @@ class sat_results(keras.callbacks.Callback):
         for s in l.states:
             rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
         
-    #def on_train_begin(self, logs=None):
+    def on_train_begin(self, logs=None):
+        pass
         #for layer in self.model.layers[1:]:
             #layer.add_metric(Aggremetric())
             #layer.add_metric(layer.aggregators['r_s'], name="r_s_added_callb")    
         
     def on_batch_end(self, batch, logs=None):
-        print(f"\nLogs from batch callback: {logs}")
-        print(f"\nK.GETVALUE o_s satlayer: {K.get_value(self.model.layers[1].sat_layer.o_s)}" )
+        for l in self.model.layers[1:]:
+            logs[f'{l.name}_act'] = l.sat_layer.current_activation.numpy()
+            print(f"current_activation: {l.sat_layer.current_activation.numpy()}")
+            
+            #for target in self.log_targets:
+            #if "ACT" in self.log_targets:
+                #logs.update(l.name + '_act_' + str(self.batch_count) : l.sat_layer.current_activation.numpy())
+            
+            #TODO implement own write logs fun to handle different destinations
+            #self._write_logs    
         
     def on_epoch_end(self, epoch, logs=None):
         for l in self.model.layers[1:]:
             
-            print(f"\nEXECUTING-EAGERLY: {tf.executing_eagerly()}")
-            print(f"\nLogs from epoch callback: {logs}")
-            _ = K.print_tensor(l.sat_layer.r_s, message="\nK.print_tensor()\n")
-            print(f"\nK.GETVALUE o_s satlayer: {K.get_value(l.sat_layer.o_s)}" )
-            #print(f"\nK.GETVALUE o_s aggregator: {K.get_value(l.aggregators['o_s'].state)}")
-            #print(f"\nK EVAL satlayer result(): {K.eval(l.sat_layer.result())}" )
+            #for dest in self.log_destinations:
+                
             
             self.layer_summary(l)
-            
             l.sat_layer.reset()
+            
             for s in l.states:
                 l.aggregators[s].reset_state()
          
-
-
 class Aggremetric(tf.keras.metrics.Metric):
     """Try version of aggregator that is used by add_metric in call() and tracked."""
     
@@ -222,8 +252,7 @@ class Aggregator(tf.keras.metrics.Metric):
     def reset_state(self):
         return self.state.assign(self.init_value)
         #K.set_value(self.state, self.init_value)
-    
-    
+       
 def clone_fn(old_layer):
     """
     This function is to be passed to clone_model() and applied to each original layer,
@@ -254,9 +283,8 @@ def satify_model(model, compile_dict={}):
     
     clone = tf.keras.models.clone_model(model, input_tensors=model.inputs, clone_function=clone_fn)
     
-    #z_in = np.ones(shape=(20,4)) TODO get defined input shape
-    #z_in = np.ones(shape=model.layers[0].input_shape[-2:])
-    z_in = np.ones(shape=(1,28,28))
+    example_input_shp = (1,) + model.input_shape[1:]
+    z_in = np.ones(shape=example_input_shp)
     assert np.allclose(model.predict(z_in), clone.predict(z_in)), "Cloned Model Predictions don't match Original!"
     
     
@@ -270,9 +298,7 @@ def satify_model(model, compile_dict={}):
     merged_dict = {**default_compile_dict, **compile_dict}    
         
     clone.compile(**merged_dict)
-    
-    
-    print("Clone_Model.satify_model() end.")
+ 
     return clone 
     
 
