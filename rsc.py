@@ -215,7 +215,9 @@ def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
     
     equal_elements = tf.math.equal(t1, t2) 
     all_equal = tf.math.reduce_all(equal_elements, axis=None)
-    if tf.executing_eagerly(): print(f"Tensors equal -> {str(all_equal.numpy())}")
+    if tf.executing_eagerly() and all_equal.numpy() == True:
+        print(f"Tensors {name1} and {name2} are equal! \n")
+        return
     
     diff = t1 - t2 #Not abs() 
     diff_rsum = tf.math.reduce_sum(diff, axis=None)
@@ -228,21 +230,27 @@ def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
     diff_ratio_avg2 = tf.math.reduce_sum(diff_ratio2, axis=None) / tf.size(t2, out_type=tf.dtypes.float64)
     print(f"Avg Ratio Diff/Value of {name1} elements: {diff_ratio_avg1}")
     print(f"Avg Ratio Diff/Value of {name2} elements: {diff_ratio_avg2}")
-    #TODO change to Avg Ratios Diff/{name1}, Diff/{name2}: {diff_ratio_avg1}, {diff_ratio_avg2}
+    print(f"Avg of elementwise Ratios Diff/{name1}, Diff/{name2}: {diff_ratio_avg1}, {diff_ratio_avg2}")
     max_diff_ratio1 = tf.math.reduce_max(diff_ratio1, axis=None)
     max_diff_ratio2 = tf.math.reduce_max(diff_ratio2, axis=None)
     print(f"Max Ratio Diff/Value {name1}: {max_diff_ratio1}")
     print(f"Max Ratio Diff/Value {name2}: {max_diff_ratio2}") #check argmax?
     
-    print("\n\n")
+    print("\n")
     #TODO add range of diff, isequal, hash, rsum, dtype, head,...
     #TODO plot matrix of diffs, ratios etc. (heatmap eg)
     
 def compare_tensor_lists(l1, l2, names1=None, names2=None):
     #Untested
-    if names1 and names2:
+    
+    if not (names1 and names2):
+        compare_tensors(t1, t2)
+        
+    if isinstance(names1, list) and isinstance(names2, list):
         for t1, t2, n1, n2 in zip(l1, l2, names1, names2):
             compare_tensors(t1, t2, n1, n2)
-    else:
-        for t1, t2 in zip(l1, l2):
-            compare_tensors(t1, t2)   
+            
+    if isinstance(names1, str) and isinstance(names2, str):
+        for ix, (t1, t2) in enumerate(zip(l1, l2)):
+            compare_tensors(t1, t2, names1+f"_{ix}", names2+f"_{ix}")   
+            

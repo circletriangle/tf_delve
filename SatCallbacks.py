@@ -101,31 +101,30 @@ class sat_logger(keras.callbacks.Callback):
        
     def on_epoch_end(self, epoch, logs=None):
          
-        #Check Replicas/Distribution 
+        #CHECK REPLICAS/DISTRIBUTION 
         print(f"cross-replica-ctxt: {tf.distribute.in_cross_replica_context()}")
         print(f"tf.dist.strat:  {tf.distribute.get_strategy()}") 
         
-        #Compare Activation Logging (tf.var vs. keras weight)
+        #COMPARE ACTIVATION LOGGING (tf.var vs. keras weight)
         for ix, l in enumerate(self.model.layers[1:]):
             for (batch_k, batch_tf) in zip(self.batch_log[f"layer_{ix}"], self.batch_log_tf[f"layer_{ix}"]): #TODO theres rsc.compare_tensor_lists()
-                #print(f"Keras logged activation: {batch_k}")
-                #print(f"TF logged activation: {batch_tf}")
-                print(f"Compare tensors: {rsc.compare_tensors(batch_k, batch_tf, 'batch_k', 'batch_tf')}")
-        
+                #print(f"Keras logged activation: {batch_k}\nTF logged activation: {batch_tf}")
+                rsc.compare_tensors(batch_k, batch_tf, 'batch_k', 'batch_tf')
+                rsc.compare_tensor_lists(batch_k, batch_tf, 'batch_k', 'batch_tf')
         #raise Exception("Just to break before the rest gets printed.")        
          
-        #Compare Results (Aggregators, sat_layer states, both algorithms) 
+        #COMPARE RESULTS (Aggregators, sat_layer states, both algorithms) 
         for ix, l in enumerate(self.model.layers[1:]):
             if ix==2:
                 return
             
-            #Two-Pass CovMat
+            #TWO-PASS COVMAT
             tp_cov_mat, tp_cov_mat_e = SatFunctions.two_pass_cov(self.batch_log[f"layer_{ix}"])
             #print(f"Two Pass CovMat {l}: {tp_cov_mat}")
             #rsc.compare_tensors(tp_cov_mat, tp_cov_mat_e, "tp_cov_batched", "tp_cov_epoch")
             
             
-            #Naive CovMat
+            #NAIVE COVMAT
             o_s, r_s, s_s, _ = l.sat_layer.get_states()
             naive_cov_mat = SatFunctions.get_cov_mat(o_s, r_s, s_s)
             naive_cov_mat_N = SatFunctions.get_cov_mat(50, r_s, s_s)
@@ -134,7 +133,7 @@ class sat_logger(keras.callbacks.Callback):
             
             print(f"o_s: {o_s}")
             
-            #Compare Cov-Algorithms
+            #COMPARE COV-ALGORITHMS
             print(f"naive_cov_mat.shape: {naive_cov_mat.get_shape()}")
             print(f"rsum_naive: {tf.math.reduce_sum(naive_cov_mat)}, rsum_tp: {tf.math.reduce_sum(tp_cov_mat)}")
             rsc.compare_tensors(tp_cov_mat, naive_cov_mat, "tp_covmat", "naive_cov_mat")
