@@ -10,14 +10,39 @@ import rsc
 importlib.reload(SatFunctions)
 
 
+def layer_summary(self, layer):
+    """
+        Prints a layers states and results, comparing 
+        naive vs. two-pass algorithms. -> cant do that bc tp is tracked in cb TODO remove? 
+         
+        For Debugging NOT for saving/logging.
+    """
+    l = layer
+    print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
+    if tf.executing_eagerly(): print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
+    
+    layer_values = l.sat_layer.show_states()
+    aggr_sat = SatFunctions.get_sat(l.features, *aggr_values, delta=0.99)
+    l_sat = l.sat_layer.result()
+    l_sat_ag = l.sat_layer.sat(*aggr_values)
+    print(f"Sublayer-sat from sublayer_vals: {l_sat}")
+    print(f"Sublayer-sat from aggr_vals: {l_sat_ag}")
+    print(f"SatFunctions-sat from aggr_vals: {aggr_sat}")
+    
+    #Compare states
+    val_dict = {n : vals for n, vals in zip(l.states, zip(layer_values, aggr_values))}
+    for s in l.states:
+        rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
+    
+
 class sat_logger(keras.callbacks.Callback):
     """
-    Callback that accesses SatLayer values to log saturation
-    and reset SatLayer states (!)
-    Logs all batch activations to compute Two-Pass Covariance
-    on epoch end.
+        Callback accessing SatLayer values to log saturation
+        and reset SatLayer states (!)
+        Logs all batch activations to compute Two-Pass Covariance
+        on epoch end.
 
-    TODO add all logging/plotting options in this callback
+        TODO add all logging/plotting options in this callback
     """
 
     def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
@@ -53,17 +78,24 @@ class sat_logger(keras.callbacks.Callback):
             rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
 
     def on_train_begin(self, logs):
-        """Initialize lists to log each layers and batches activation."""
+        """
+            Initialize lists to log each layers and batches activation.
+        """
         for ix, l in enumerate(self.model.layers[1:]):    
           self.batch_log[f"layer_{ix}"] = []
           self.batch_log_tf[f"layer_{ix}"] = []
+        
+        #CHECK REPLICAS/DISTRIBUTION 
+        print(f"cross-replica-ctxt: {tf.distribute.in_cross_replica_context()}")
+        print(f"tf.dist.strat:  {tf.distribute.get_strategy()}")   
           
     def on_batch_end(self, batch, logs=None):
         for ix, l in enumerate(self.model.layers[1:]):
-            self.batch_log[f"layer_{ix}"].append(l.sat_layer.current_activation.numpy())
-            self.batch_log_tf[f"layer_{ix}"].append(l.log_layer.activation.numpy())
-            os, rs, ss, ca = l.sat_layer.get_states()
-            #print(f"batch {batch}: o_s: {os}")
+            if hasattr(l, 'sat_layer'):
+                self.batch_log[f"layer_{ix}"].append(l.sat_layer.current_activation.numpy())
+                self.batch_log_tf[f"layer_{ix}"].append(l.log_layer.activation.numpy())
+                os, rs, ss, ca = l.sat_layer.get_states()
+                #print(f"batch {batch}: o_s: {os}")
         
         return 
         for l in self.model.layers[1:]:
@@ -101,9 +133,7 @@ class sat_logger(keras.callbacks.Callback):
        
     def on_epoch_end(self, epoch, logs=None):
          
-        #CHECK REPLICAS/DISTRIBUTION 
-        print(f"cross-replica-ctxt: {tf.distribute.in_cross_replica_context()}")
-        print(f"tf.dist.strat:  {tf.distribute.get_strategy()}") 
+        
         
         #COMPARE ACTIVATION LOGGING (tf.var vs. keras weight)
         for ix, l in enumerate(self.model.layers[1:]):
@@ -149,3 +179,53 @@ class sat_logger(keras.callbacks.Callback):
             l.sat_layer.reset()
             
         
+class sat_results(keras.callbacks.Callback):
+    """
+        Callback that accesses SatLayer values to log saturation
+        and reset SatLayer states (!)
+
+        TODO just pass a nested dict as argument for all the options~?
+        TODO  
+        TODO add all logging/plotting options in this callback
+    """
+
+    def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
+        super(sat_results, self).__init__()
+        self.batch_count = 0 
+        self.batch_intervall = batch_intervall
+        self.log_targets = log_targets
+        self.log_destinations = dict.fromkeys(log_destinations, None)
+        
+        #self._chief_worker_only = True ?
+        #if "TB" in log_destinations.keys:
+        #    self.log_destinations["TB"] = tf.summary.create_file_writer(logdir="./cloning_eager_dis/logs/tb/sat/")
+
+    
+    def on_train_begin(self, logs=None):
+        pass
+        
+    def on_batch_end(self, batch, logs=None):
+        for l in self.model.layers[1:]:
+            if hasattr(l, 'sat_layer'):
+                logs[f'{l.name}_act'] = l.sat_layer.current_activation.numpy()
+                print(f"current_activation: {l.sat_layer.current_activation.numpy()}")
+                
+                #for target in self.log_targets:
+                #if "ACT" in self.log_targets:
+                    #logs.update(l.name + '_act_' + str(self.batch_count) : l.sat_layer.current_activation.numpy())
+                
+                #TODO implement own write logs fun to handle different destinations
+                #self._write_logs    
+        
+    def on_epoch_end(self, epoch, logs=None):
+        for l in self.model.layers[1:]:
+            if hasattr(l, 'sat_layer'):
+                    
+                #for dest in self.log_destinations:
+                    
+                
+                #rsc.layer_summary(l)
+                l.sat_layer.reset()
+                
+                #for s in l.states:
+                #    l.aggregators[s].reset_state()        

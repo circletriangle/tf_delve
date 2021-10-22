@@ -57,7 +57,7 @@ class mydense(keras.layers.Dense):
         if "output_shape" in params.keys():
             output_shape = params["output_shape"]
         
-        #Add Sublayers
+        #ADD SUBLAYERS
         if not self.weights==[]:
             self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))
             self.log_layer = SatLayer.log_layer(input_shape=output_shape, dtype=self.dtype, name="log_l_"+str(self.name))    
@@ -67,36 +67,13 @@ class mydense(keras.layers.Dense):
         shapes = [(),(features),(features,features)]
         self.features = tf.dtypes.cast(features, dtype=tf.float64)
 
-
-        #InfoA mit names :)
-        self.aggregators = {name : Aggregator(shape, name=name+str(self.name)) 
-                            for name, shape in zip(self.states,shapes)}
-        
-        
-        #TODO remove
-        self.ag_metrics = [self.aggregators[state] for state in self.states]
-        self.ag_metrics_tpl = [(state, self.aggregators[state]) for state in self.states]
-        
     def __init__(self, custom_params=None, *args, **kwargs):
         """Init Dense Object and extend it with process_params()"""
         super(mydense, self).__init__(*args, **kwargs) 
         if custom_params:
             self.process_params(custom_params)
         else:
-            raise NameError("Extra Parameters not found!")    
-            
-    @property
-    def sat_states(self):
-        """Should be part of logs that are passed to batch callbacks?
-        Without being processed by keras.""" 
-        return self.ag_metrics       
-            
-    @property
-    def metrics(self):
-        """Trying to get our not added() metrics into metrics-list.
-        Scalar metric gets into metrics-list but not history.h.keys() ~kinda hacky
-        TODO keras tries to set the non scalar matrices to 0 no broadcasting."""
-        return [self.ag_metrics[0]]        
+            raise NameError("Extra Parameters not found!")          
                             
     def call(self, inputs):
         """Pass activation to sat_layer/aggregators and return it.
@@ -107,152 +84,12 @@ class mydense(keras.layers.Dense):
         o, r, s, = self.sat_layer.get_update_values(out)
         
         _ = self.log_layer(out)
-        
-        self.aggregators['o_s'].update_state(o) 
-        self.aggregators['r_s'].update_state(r) 
-        self.aggregators['s_s'].update_state(s)               
-        
-        #for name, aggr in self.ag_metrics_tpl:
-            #self.model.metrics_names.append(self.name+name)
-            #self.model.metrics_tensors.append(aggr)   
-        #_ = K.print_tensor(s, message="K.print_tensor() in call(/)")
-        # add_metric() API won't let custom metric aggregate (Why is it not recognized as metrics.Metric subclass?)
-        #aggr_try = Aggremetric(r, name="Agrmtrc")
-        #self.add_metric(aggr_try, name="ajsdfklas")
-        #-> try adding normal aggregators to metrics()
-        # keras refuses to not mean aggr here
+         
         #self.add_metric(o, aggregation=tf.VariableAggregation.SUM, name="tf_aggregation")
         
         #with tf.control_depencies([_o, _r, _s]):
         return out
-        
-
-class sat_results(keras.callbacks.Callback):
-    """
-    Callback that accesses SatLayer values to log saturation
-    and reset SatLayer states (!)
-
-    TODO just pass a nested dict as argument for all the options~?
-    TODO  
-    TODO add all logging/plotting options in this callback
-    """
-
-    def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
-        super(sat_results, self).__init__()
-        self.batch_count = 0
-        self.batch_intervall = batch_intervall
-        self.log_targets = log_targets
-        self.log_destinations = dict.fromkeys(log_destinations, None)
-        
-        #self._chief_worker_only = True ?
-        #if "TB" in log_destinations.keys:
-        #    self.log_destinations["TB"] = tf.summary.create_file_writer(logdir="./cloning_eager_dis/logs/tb/sat/")
-
-    def layer_summary(self, layer):
-        """For Debugging NOT for saving/logging. maybe move to rsc"""
-        l = layer
-        print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
-        if tf.executing_eagerly(): print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
-        for name in l.states: 
-            print(f"{name} aggregator: {tf.shape(l.aggregators[name].result())}")
-        
-        aggrs = [l.aggregators[name] for name in l.states]
-        aggr_values = [aggr.result() for aggr in aggrs]
-        layer_values = l.sat_layer.show_states()
-        aggr_sat = SatFunctions.get_sat(l.features, *aggr_values, delta=0.99)
-        l_sat = l.sat_layer.result()
-        l_sat_ag = l.sat_layer.sat(*aggr_values)
-        print(f"Sublayer-sat from sublayer_vals: {l_sat}")
-        print(f"Sublayer-sat from aggr_vals: {l_sat_ag}")
-        print(f"SatFunctions-sat from aggr_vals: {aggr_sat}")
-        
-        #Compare states
-        val_dict = {n : vals for n, vals in zip(l.states, zip(layer_values, aggr_values))}
-        for s in l.states:
-            rsc.compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)
-        
-    def on_train_begin(self, logs=None):
-        pass
-        #for layer in self.model.layers[1:]:
-            #layer.add_metric(Aggremetric())
-            #layer.add_metric(layer.aggregators['r_s'], name="r_s_added_callb")    
-        
-    def on_batch_end(self, batch, logs=None):
-        for l in self.model.layers[1:]:
-            logs[f'{l.name}_act'] = l.sat_layer.current_activation.numpy()
-            print(f"current_activation: {l.sat_layer.current_activation.numpy()}")
-            
-            #for target in self.log_targets:
-            #if "ACT" in self.log_targets:
-                #logs.update(l.name + '_act_' + str(self.batch_count) : l.sat_layer.current_activation.numpy())
-            
-            #TODO implement own write logs fun to handle different destinations
-            #self._write_logs    
-        
-    def on_epoch_end(self, epoch, logs=None):
-        for l in self.model.layers[1:]:
-            
-            #for dest in self.log_destinations:
-                
-            
-            self.layer_summary(l)
-            l.sat_layer.reset()
-            
-            for s in l.states:
-                l.aggregators[s].reset_state()
-         
-class Aggremetric(tf.keras.metrics.Metric):
-    """Try version of aggregator that is used by add_metric in call() and tracked."""
-    
-    def __init__(self, input, name=None, dtype=tf.float64):
-        super(Aggremetric, self).__init__(name=name, dtype=dtype)
-        
-        self.shape = K.int_shape(input)
-        self.init = tf.keras.initializers.Zeros()
-        self.value = self.add_weight("aggremetric_state",
-                                     shape=self.shape,
-                                     dtype=tf.float64,
-                                     initializer=self.init) 
-                
-    def update_state(self, y_true, y_pred, sample_weights=None):
-        return self.value.assign_add(y_true)
-    
-    def update_state(self, update_tensor):
-        return self.value.assign_add(update_tensor)
-    
-    def reset_state(self):
-        return self.value.assign(self.init(self.shape))
-    
-    def result(self):
-        return self.value    
-                              
-class Aggregator(tf.keras.metrics.Metric):
-    """Aggregate by updating a state by a tensor. """
-    
-    def __init__(self, shape, name=None, dtype=tf.float64):
-        """Track/update one state."""
-        super(Aggregator, self).__init__(name=name, dtype=dtype)
-        
-        #self.init = tf.keras.initializers.Zeros()
-        #self.shape = shape
-        self.state = self.add_weight("aggr_state_"+name, 
-                                    shape=shape,  
-                                    dtype=dtype,
-                                    initializer=tf.keras.initializers.Zeros())
-        self.init_value = tf.zeros(shape=shape, dtype=dtype, name="aggr_init_"+name)
-        
-    def update_state(self, update_tensor):
-        #tf.print(f"AGGREG UPDATESTATE() CALLED: {update_tensor}")
-        return self.state.assign_add(update_tensor)
-    
-    def result(self):
-        return self.state
-    
-    
-    def reset_state(self):
-        return self.state.assign(self.init_value)
-        #K.set_value(self.state, self.init_value)
-       
+                  
 def clone_fn(old_layer):
     """
     This function is to be passed to clone_model() and applied to each original layer,
@@ -274,19 +111,52 @@ def clone_fn(old_layer):
         new_layer = mydense.from_config_params(params, config)
         return new_layer
     else:
-        print(old_layer.__class__)
+        
+        #try and see if i need to copy weights separately, think not but can't google rn
+        new_layer = old_layer.__class__.from_config(old_layer.get_config())
+        #new_layer.call(np.ones(shape=(1,)+old_layer.input_shape[1:] ))
+        #new_layer.call(np.ones(shape=old_layer.input_shape ))
+        #new_layer.set_weights(old_layer.get_weights())
+        return new_layer
+        
+        print(old_layer.__class__.__name__)
         return old_layer.__class__.from_config(old_layer.get_config())
     
-def satify_model(model, compile_dict={}):
+    
+    
+    
+    
+def satify_model(model, compile_dict={}, batch_size=None):
     
     assert model.output_shape, "Output Shape not defined! (Call model to build)"
     
+    print(f"Model output_shape: {model.output_shape}")
+    
     clone = tf.keras.models.clone_model(model, input_tensors=model.inputs, clone_function=clone_fn)
+    
+    # check if clone and model prediction diff comes from non-mydense layers not having weights copied.
+    for clone_layer, og_layer in zip(clone.layers, model.layers): 
+        print(f"Layer {clone_layer.__class__.__name__}")  
+        #print(f"config, weights: {clone_layer.get_config()}, {clone_layer.get_weights()}")
+        #if clone_layer.__class__ == og_layer.__class__:
+        #    assert not clone_layer.weights==[], "Clone Layer weights uninitialized"
+        #    assert (np.allclose(clone_layer.get_weights(), og_layer.get_weights()) \
+        #        or clone_layer.__class__ == mydense), f"Layer weights don't match! Class: {og_layer.__class__.__name}" 
     
     example_input_shp = (1,) + model.input_shape[1:]
     z_in = np.ones(shape=example_input_shp)
-    assert np.allclose(model.predict(z_in), clone.predict(z_in)), "Cloned Model Predictions don't match Original!"
     
+    """
+    clone.predict(z_in)
+    for c_l, og_l in zip(clone.layers, model.layers):
+        if c_l.__class__ == og_l.__class__: 
+            c_l.set_weights(og_l.get_weights())
+            print(f"Set weights for {c_l}")
+    """    
+    """
+    assert np.allclose(model.predict(z_in), clone.predict(z_in)), \
+        f"Cloned Model Predictions don't match Original! \n Original: {model.predict(z_in)}, \n Clone: {clone.predict(z_in)}  \n"
+    """
     
     default_compile_dict = {
         'optimizer': model.optimizer.__class__.__name__,

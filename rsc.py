@@ -4,10 +4,34 @@ from tensorflow import keras as keras
 from tensorflow.keras import layers
 import importlib
 from tensorflow.keras.datasets import mnist
+from tensorflow.keras.datasets import cifar10
+from tensorflow.keras.applications.vgg16 import VGG16
+from tensorflow.keras.applications.vgg16 import preprocess_input # to be used on the data for vgg16
+from tensorflow.keras.utils import to_categorical
 
 ###############################################################################
 #  DATA
 ###############################################################################
+
+
+def get_cifar10(one_hot=True, in_dtype='float64'):
+    """
+    Returns: tuples training, test of cifar10 with one-hot labels, [0,1] scaled pixel values, float64 dtype 
+    """
+    
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+    
+    if one_hot: 
+	    # one hot encode target values
+	    y_train = to_categorical(y_train)
+	    y_test = to_categorical(y_test)
+	    
+    # Cast to float64 and normalize values to [0,1] 255?
+    x_train, x_test = x_train.astype(in_dtype) / 255.0, x_test.astype(in_dtype) / 255.0  
+    
+    print(f"Shape of cifar10 y_train: {y_train.shape}")
+    
+    return (x_train, y_train), (x_test, y_test)
 
 def download_data():
     TRAIN_DATA_URL = "https://storage.googleapis.com/tf-datasets/titanic/train.csv"
@@ -98,14 +122,25 @@ def broadcast_label(data, dim=1):
         return features, label * dim
     return data.map(broadcast_label_inner)
   
-def get_data():
-    training_data, test_data = get_titanic_dataset()    
+def get_data(query={}):
+    """
+    Calls functions to get one-hot encoded datasets as training and test tuples.
+    Args: dict query specifying dataset to return and options like resolution, dtype, etc.
+    Returns: tuple (x_train, y_train), tuple (x_train, y_train)
+    """    
+    
+    if query["dataset"] == "titanic":
+        train, test = get_titanic_dataset()    
+    if query["dataset"] == "cifar10":
+        train, test = get_cifar10()
+    
+    return train, test
     
 def get_mnist():
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
     return (x_train, y_train), (x_test, y_test)
         
-def get_cifar10():
+def get_cifar10_old_todelete():
     """
     #https://www.tensorflow.org/datasets/catalog/cifar10 <- tf link not keras 
     Dataset of 50,000 32x32 color training images and 10,000 test images, labeled over 10 categories
@@ -201,6 +236,25 @@ def get_functional_api_autoencoder():
     autoencoder = keras.Model(encoder_input, decoder_output, name="autoencoder")
     autoencoder.summary()
 
+def get_vgg16(query={}):
+    """
+    Adds layers on top of the core vgg16 layers.
+    Args: dict query specifications for vgg16 options
+    Returns: keras.model model
+    """
+    
+    vgg16 = VGG16(weights="imagenet", include_top=False, input_shape=(32,32,3))
+    
+    x = tf.keras.layers.Flatten()(vgg16.output)
+    x = tf.keras.layers.Dense(units=512, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Dense(units=256, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Dense(units=10, activation='softmax')(x)
+    
+    model = tf.keras.models.Model(inputs=vgg16.inputs, outputs=x)
+    
+    return model
     
 ###############################################################################
 #  UTILS
@@ -254,3 +308,26 @@ def compare_tensor_lists(l1, l2, names1=None, names2=None):
         for ix, (t1, t2) in enumerate(zip(l1, l2)):
             compare_tensors(t1, t2, names1+f"_{ix}", names2+f"_{ix}")   
             
+
+def layer_summary(layer):
+    """For Debugging NOT for saving/logging. maybe move to rsc"""
+    l = layer
+    print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
+    if tf.executing_eagerly(): print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
+    for name in l.states: 
+        print(f"{name} aggregator: {tf.shape(l.aggregators[name].result())}")
+    
+    aggrs = [l.aggregators[name] for name in l.states]
+    aggr_values = [aggr.result() for aggr in aggrs]
+    layer_values = l.sat_layer.show_states()
+    aggr_sat = SatFunctions.get_sat(l.features, *aggr_values, delta=0.99)
+    l_sat = l.sat_layer.result()
+    l_sat_ag = l.sat_layer.sat(*aggr_values)
+    print(f"Sublayer-sat from sublayer_vals: {l_sat}")
+    print(f"Sublayer-sat from aggr_vals: {l_sat_ag}")
+    print(f"SatFunctions-sat from aggr_vals: {aggr_sat}")
+    
+    #Compare states
+    val_dict = {n : vals for n, vals in zip(l.states, zip(layer_values, aggr_values))}
+    for s in l.states:
+        compare_tensors(val_dict[s][0], val_dict[s][1], "Layer_"+s, "Aggregator_"+s)

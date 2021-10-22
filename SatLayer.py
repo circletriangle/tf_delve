@@ -189,13 +189,14 @@ class sat_layer(keras.layers.Layer):
         
         return saturation
 
-    def __init__(self, input_shape, delta=0.99, name=None):
+    def __init__(self, input_shape, delta=0.99, name=None, cov_alg="naive"):
         """Init base layer and 'config info' as class variables."""
         super(sat_layer, self).__init__(name=name)
         self.layer_width=input_shape[1:]
         self.layer_width_tensor=tf.constant(input_shape[1:], dtype=tf.float64)
         self.delta = tf.dtypes.cast(delta, dtype=tf.float64)
         self.act_shape=()
+        self.cov_alg=cov_alg
         
     def build(self, input_shape):
         """
@@ -204,7 +205,7 @@ class sat_layer(keras.layers.Layer):
         TODO pass input_shape here
         TODO use layer_width for init shapes instead of the input-tensor
         """        
-        
+        n_spls_epoch=0
         #input_shape = K.int_shape(input)
         print(f"input_shape: {input_shape}")
         #print(f"input.get_shape(): {input.get_shape().as_list()}")
@@ -214,12 +215,19 @@ class sat_layer(keras.layers.Layer):
         self.inits=[np.zeros(shape=(1,), dtype=np.float64), 
                     np.zeros(shape=input_shape[1:]), 
                     np.zeros(shape=input_shape[1:]*2),
-                    np.zeros(shape=(10, *self.layer_width))]
-        
+                    np.zeros(shape=(0, *self.layer_width)),
+                    np.zeros(shape=(n_spls_epoch, *self.layer_width))] #TODO see how the batchsize 10 here can be made variable otherwise you need to know and hardcode batchsize in advance
+                    #either pass the batchsize :/, somehow make a list
+                    #or use a tensor containing all batches/samples and guess/pass number of samples beforehand. 
+                    #every pass we could insert a new batch taking the place of zeros or NAs
+
+
+                    
         self.o_s = self.add_weight(shape=self.inits[0].shape, name="o_s", initializer='zeros', dtype=tf.float64, trainable=False)
         self.r_s = self.add_weight(shape=self.inits[1].shape, name="r_s", initializer='zeros', dtype=tf.float64, trainable=False)       
         self.s_s = self.add_weight(shape=self.inits[2].shape, name="s_s", initializer='zeros', dtype=tf.float64, trainable=False)
         self.current_activation = self.add_weight(shape=self.inits[3].shape, name="curr_act", initializer='zeros', dtype=tf.float64, trainable=False)
+        self.epoch_activations = self.add_weight(shape=self.inits[3].shape, name="epoch_act", initializer='zeros', dtype=tf.float64, trainable=False)
         
         self.built = True
         self.reset()
@@ -284,7 +292,8 @@ class sat_layer(keras.layers.Layer):
         #OBSERVED SAMPLES
         batch_size = [shape[0]] 
         if batch_size == [None]:
-            batch_size = [0.]
+            batch_size = [0.] #TODO here we would have to use the specified batch_size passed in satify_model()
+            print(f"batch_size initialized. current shape is: {tf.shape(input_tensor[0])}")
         self.o_s.assign_add(batch_size) 
         
         #RUNNING SUM
@@ -298,8 +307,11 @@ class sat_layer(keras.layers.Layer):
         ->No that happens automatically when squaring the matrix i think ~TODO"""
         
         #LOGGING THE BATCH-ACTIVATION
-        if batch_size != [None]:
-            self.current_activation.assign(input_tensor)
+        if batch_size != [None] and self.cov_alg=="two-pass":
+            self.current_activation.assign(input_tensor) #TODO breaks here because batchsize static
+                
+        #LOGGING BATCH-ACTIVATION IN EPOCH-SPANNING TENSOR
+                
                 
         tf.debugging.assert_shapes([
             (input_tensor, (None, self.layer_width)),
@@ -325,6 +337,10 @@ class sat_layer(keras.layers.Layer):
         
         if len(self.weights)==0:
             self.build(input.get_shape().as_list()) #TODO get shape right here
+            
+        if input.get_shape() != self.current_activation.get_shape():
+            print(f"SatLayer input shape {input.get_shape()} not matching current_activation property shape {self.current_activation.get_shape()}")    
+            
         return self.update(input)
     
     def call(self, inputs, training=None):
