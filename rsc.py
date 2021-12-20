@@ -16,19 +16,19 @@ from tensorflow.keras.utils import to_categorical
 
 def get_cifar10(one_hot=True, in_dtype='float64'):
     """
-    Returns: tuples training, test of cifar10 with one-hot labels, [0,1] scaled pixel values, float64 dtype 
+        Returns: tuples training, test of cifar10 with one-hot labels, [0,1] scaled pixel values, float64 dtype 
     """
     
     (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+
+    # one hot encode target values
+    if one_hot:
+        y_train = to_categorical(y_train)
+        y_test = to_categorical(y_test)
     
-    if one_hot: 
-	    # one hot encode target values
-	    y_train = to_categorical(y_train)
-	    y_test = to_categorical(y_test)
-	    
     # Cast to float64 and normalize values to [0,1] 255?
-    x_train, x_test = x_train.astype(in_dtype) / 255.0, x_test.astype(in_dtype) / 255.0  
-    
+    x_train, x_test = x_train.astype(in_dtype) / 255.0, x_test.astype(in_dtype) / 255.0
+
     print(f"Shape of cifar10 y_train: {y_train.shape}")
     
     return (x_train, y_train), (x_test, y_test)
@@ -50,7 +50,7 @@ def get_dataset(file_path, batch_size=20, num_epochs=1, **kwargs):
         num_epochs=num_epochs,
         ignore_errors=False, 
         **kwargs)
- 
+
     return dataset
 
 def show_batch(dataset):
@@ -122,12 +122,15 @@ def broadcast_label(data, dim=1):
         return features, label * dim
     return data.map(broadcast_label_inner)
   
-def get_data(query={}):
+def get_data(query=None):
     """
     Calls functions to get one-hot encoded datasets as training and test tuples.
     Args: dict query specifying dataset to return and options like resolution, dtype, etc.
     Returns: tuple (x_train, y_train), tuple (x_train, y_train)
     """    
+    
+    if query==None:
+        raise Exception('No Dataset specified!')    
     
     if query["dataset"] == "titanic":
         train, test = get_titanic_dataset()    
@@ -166,7 +169,13 @@ def get_cifar10_old_todelete():
 #  MODELS
 ###############################################################################
 
-def get_model(data, type="default", metrics=[], callbacks=[], depth=4, out_feat=2):
+def get_model(data, type="default", metrics=None, callbacks=None, depth=4, out_feat=2):
+    
+    if metrics==None:
+        metrics=[]
+    if callbacks==None:
+        callbacks=[]    
+    
     #https://www.tensorflow.org/guide/keras/train_and_evaluate/
     #inputs = keras.Input(shape=(784,), name="digits")
     inputs = keras.Input(shape=(4,), name="model_input")
@@ -202,7 +211,10 @@ def get_model_mnist(data=None):
     
     return model
 
-def get_model_unitlist(data=None, hidden_layers_spec=[128]):
+def get_model_unitlist(data=None, hidden_layers_spec=None):
+    
+    if hidden_layers_spec == None:
+        hidden_layers_spec=[128]
     
     #using model.add() smoother
     in_layer = [tf.keras.layers.Flatten(input_shape=(28,28))]
@@ -236,12 +248,16 @@ def get_functional_api_autoencoder():
     autoencoder = keras.Model(encoder_input, decoder_output, name="autoencoder")
     autoencoder.summary()
 
-def get_vgg16(query={}):
+def get_vgg16(query=None):
     """
-    Adds layers on top of the core vgg16 layers.
-    Args: dict query specifications for vgg16 options
-    Returns: keras.model model
+        Adds layers on top of the core vgg16 layers.
+        
+        Parameters: query (dict): specifications for vgg16 options
+        Returns: model (keras.model)
     """
+    
+    if query==None: 
+        query={}
     
     vgg16 = VGG16(weights="imagenet", include_top=False, input_shape=(32,32,3))
     
@@ -293,6 +309,7 @@ def compare_tensors(t1, t2, name1="tensor 1", name2="tensor 2"):
     print("\n")
     #TODO add range of diff, isequal, hash, rsum, dtype, head,...
     #TODO plot matrix of diffs, ratios etc. (heatmap eg)
+
     
 def compare_tensor_lists(l1, l2, names1=None, names2=None):
     #Untested

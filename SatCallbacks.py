@@ -15,7 +15,7 @@ def layer_summary(self, layer):
         Prints a layers states and results, comparing 
         naive vs. two-pass algorithms. -> cant do that bc tp is tracked in cb TODO remove? 
          
-        For Debugging NOT for saving/logging.
+        DEBUGGING ONLY! NOT for saving/logging.
     """
     l = layer
     print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
@@ -37,6 +37,13 @@ def layer_summary(self, layer):
 
 class sat_logger(keras.callbacks.Callback):
     """
+        (Messy Callback containing the working/successful loops! and using both algorithm's loops at once! Mamma Mia :D
+        Apparently performs 2-pass loop using activations obtained from sat_layer's current_activation weight.
+        Also seemingly contains unfinished code snippets meant to implement logging etc later.
+        TODO in the future best use this only together with log_layer so the two approaches don't interfere with each other
+        
+        Original doc below:)    
+        
         Callback accessing SatLayer values to log saturation
         and reset SatLayer states (!)
         Logs all batch activations to compute Two-Pass Covariance
@@ -45,7 +52,13 @@ class sat_logger(keras.callbacks.Callback):
         TODO add all logging/plotting options in this callback
     """
 
-    def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
+    def __init__(self, log_targets=None, log_destinations=None, batch_intervall=None):
+        
+        if log_targets==None:
+            log_targets=["SAT"]
+        if log_destinations==None:
+            log_destinations=["PRINT","CSV"]    
+        
         super(sat_logger, self).__init__()
         self.batch_count = 0
         self.batch_intervall = batch_intervall
@@ -55,7 +68,13 @@ class sat_logger(keras.callbacks.Callback):
         self.batch_log_tf = {}
        
     def layer_summary(self, layer):
-        """For Debugging NOT for saving/logging. maybe move to rsc"""
+        """
+            TODO CHECK if can be SAFELY DELETED (saw no calls to this), 
+            -> probably the non-class layer_summary() has replaced this, but this function has more lines/function
+            
+            Only documentation was:
+            "For Debugging NOT for saving/logging. maybe move to rsc"
+        """
         l = layer
         print(f"\nLayer {l.name} sat_result: {l.sat_layer.result()}")
         if tf.executing_eagerly(): print(f"Observed samples sat_layer: {l.sat_layer.o_s.numpy()}")
@@ -106,6 +125,8 @@ class sat_logger(keras.callbacks.Callback):
                     self.cb_log["STATES"][f"batch_{self.batch_count}_layer_{l.name}"] = l.sat_layer.show_states()
                 if target == "SAT":
                     self.cb_log["SAT"][f"batch_{self.batch_count}_layer_{l.name}"] = l.sat_layer.result()
+                    #TODO Why is this logging and computing an entire sat-result EVERY BATCH??? 
+                    # Logging States and Activations can make sense here, but sat? -> maybe only have this on_epoch_end()
        
             #TODO implement own write logs fun to handle different destinations
             #self._write_logs    
@@ -132,7 +153,10 @@ class sat_logger(keras.callbacks.Callback):
         #if dest ==    
        
     def on_epoch_end(self, epoch, logs=None):
-         
+        """
+            NOTE: -> This one is central, I think the successful Computing and comparing of both algorithm loops happened here?! 
+                No description-string here.
+        """ 
         
         
         #COMPARE ACTIVATION LOGGING (tf.var vs. keras weight)
@@ -181,7 +205,10 @@ class sat_logger(keras.callbacks.Callback):
         
 class sat_results(keras.callbacks.Callback):
     """
-        Callback that accesses SatLayer values to log saturation
+        (Was this one working well? or did the good stuff happen with the spaghetti sat_logger one? 
+        this one probably can't do 2-pass, and looks like other than resetting() it didn't do a lot by itself)
+    
+        Callback that accesses SatLayer values to print/log saturation
         and reset SatLayer states (!)
 
         TODO just pass a nested dict as argument for all the options~?
@@ -189,7 +216,18 @@ class sat_results(keras.callbacks.Callback):
         TODO add all logging/plotting options in this callback
     """
 
-    def __init__(self, log_targets=["SAT"], log_destinations=["PRINT","CSV"], batch_intervall=None):
+    def __init__(self, log_targets=None, log_destinations=None, batch_intervall=None):
+        """
+            Didn't have description.
+            I see what log_targets/destinations are for, 
+            but what was batch_intervall meant to do? Sanity check every nth batch?? #TODO CHECK IF DELETE SAFE (batch_intervall)
+        """
+        
+        if log_targets==None:
+            log_targets=["SAT"]
+        if log_destinations==None:
+            log_destinations=["PRINT","CSV"]    
+        
         super(sat_results, self).__init__()
         self.batch_count = 0 
         self.batch_intervall = batch_intervall
@@ -202,9 +240,24 @@ class sat_results(keras.callbacks.Callback):
 
     
     def on_train_begin(self, logs=None):
+        """
+            MAYBE IRRELEVANT
+        
+            Apparently this is only here, because I thought I might need to do something here, but the sat_layer initializes itself.
+            If it was only a mental note then -> #TODO CHECK if I can SAFELY DELETE
+        """
         pass
         
     def on_batch_end(self, batch, logs=None):
+        """
+            Didn't have description here.
+            
+            MAYBE IRRELEVANT
+            
+            Looks like I was mainly trying/playing around here, like copying current_activation to log-dict! (important elsewhere? where would that be, no)
+            #TODO since sat_layer can update by itself, maybe just delete this whole function? CHECK IF SAFE DELETE
+            (or rewrite it with the logging once that's planned out)
+        """
         for l in self.model.layers[1:]:
             if hasattr(l, 'sat_layer'):
                 logs[f'{l.name}_act'] = l.sat_layer.current_activation.numpy()
@@ -218,6 +271,13 @@ class sat_results(keras.callbacks.Callback):
                 #self._write_logs    
         
     def on_epoch_end(self, epoch, logs=None):
+        """
+            Didn't have description here.
+            I think this doesn't call sat_layer.sat() because rsc.layer_summary() did? probably
+            
+            sat_layer.reset() is important, but otherwise, not much functionality in this CB hmm
+        """
+        
         for l in self.model.layers[1:]:
             if hasattr(l, 'sat_layer'):
                     
@@ -229,3 +289,129 @@ class sat_results(keras.callbacks.Callback):
                 
                 #for s in l.states:
                 #    l.aggregators[s].reset_state()        
+                
+                
+                
+                
+                
+class sat_callback(keras.callbacks.Callback):
+    """
+        Callback meant to do the simplest basic function, receiving each layers' batch_activation while measuring actively,
+        and further process each layer's activation according to what cov_alg's are tracked.
+        
+        -> outsource computations to rsc.
+        -> take just the activations from the sublayers 
+        (which one? using sat_layer.current_activation? -> i guess access with l.get_weights() ) 
+        -> evaluating transient tensors in callback seems possible if one adds dummy outputs, but thats gonna convolute everything man
+        
+        TODO Decisions: dynamic sized tensor list for 2PASS: 
+            (1.) RaggedTensor  (supposedly as the 'tf'-dynamic list, but meh, don't really need the ragged dim either)  
+        ->  2. .numpy()      (seems like it would dodge any tf side-effects)
+            4. tf.concat / dynamic tensor
+            5. logs dict     (worked before, but not elegant or good or robust probably)
+            (6.) TensorArray  (I think specific for 'while_loop' iteration, who knows what tf will do if it's called once per callback)       
+             
+            https://www.tensorflow.org/guide/effective_tf2#do_not_keep_tftensors_in_your_objects  
+            -> tensor objects behave differently in tf.function (graph~) vs. eager ctxt. Only for intermediate values.
+            To track state, use tf.variables, they're always usable from both ctxts, (can't be reshaped / not dynamic)
+            -> problems with both tensors and variables -> use numpy to track 
+            -> rn just do it simple and list np.array(tensor.numpy()) and then np.concatenate(list) (don't need stack() for 2P Ithink)
+    """
+    
+    
+    def __init__(self, log_targets=None, log_destinations=None, batch_intervall=None, cov_alg=None, instruction_dict=None, **kwargs):
+        """
+            Initializes attributes etc. depending on specified mode.
+            batch_intervall is copied from sat_results, it's really unnecessary isn't it?
+            Should have added args or arg dict to specify behaviour/mode. instruction_dict or sth or just kwargs?
+            
+            cov_alg = "naive", "2pass", ?"both"? or rather use if naive: track naive, if 2pass: track that too,...?
+            epoch_intervall = x epochs (to skip before measuring sat again)
+            log_targets: "ACT" i guess, "SAT", 
+            
+            
+            #TODO wtf is batch_intervall an arg? cpy pasted? delete if safe. -> epoch intervall only. (+decide if instr_dict is an arg)
+            
+        """                
+        super().__init__(**kwargs)
+        
+        # separate flags for toggling tracking of either algorithm
+        self.naive = instruction_dict["track_naive"] #just use separate keys to check if one algorithm should be tracked
+        self.two_pass = instruction_dict["track_two_pass"]
+        
+        self.epoch_interval = instruction_dict["epoch_interval"]
+        
+        
+        if self.naive:
+            self.naive_states = {'o_s': 0, 'r_s': np.zeros(...), 's_s':""}
+    
+    
+    
+    def on_begin_fun(self):
+        """
+            Initialize states to track layers for both algorithms. 
+            Called by on_train_begin(), on_predict_begin()
+            
+            2PASS:
+            NAIVE:
+        """
+        
+        
+        # NAIVE:
+        self.layer_naive_t_s = {}
+        for l in self.model.layers[1:]:            
+            if hasattr(l, 'log_layer'):
+                self.layer_naive_states[l.name] = {
+                    'o_s': np.as_array((0.)),
+                    'r_s': [], #TODO inject shape here -> shape as arg? (might also query l.width() or sth, since batch collapses)
+                    's_s': []
+                } 
+        
+        # 2-PASS:
+        self.layer_activations = {}
+        for l in self.model.layers[1:]:            
+            if hasattr(l, 'log_layer'):
+                self.layer_activations[l.name] = [] 
+        
+    
+    def on_epoch_begin(self, epoch, logs=None):
+        
+        # Active only once per epoch interval in training case (add offset to start later after first y epochs?)
+        if epoch%self.epoch_interval == 0:
+            self.active = True
+        else:
+            self.active = False    
+            return  #in case I want to add code for beginning active epochs after this block
+    
+    def on_epoch_end(self, epoch, logs=None):
+        
+        # Epoch activity:
+        if not self.active:
+            return
+        else:
+            self.active = False
+        
+        
+        
+        if self.naive:
+            cov_mat_naive = rsc.cov_mat_naive()#from tracked states passed
+        
+        
+    def on_batch_end(self, batch, logs=None):
+        """
+
+        """
+        
+        if not self.active:
+            return
+        
+        # NAIVE:
+        
+        
+        # 2-PASS: 
+        for layer_name in self.layer_activations:
+            act = self.model.get_layer(layer_name).log_layer.activation.numpy()
+            self.layer_activations[layer_name].append(act) 
+            print(f"Batch {batch} Layer {layer_name} Activation: \n {act}\n")
+                
+            
