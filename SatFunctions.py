@@ -10,14 +10,12 @@ def get_cov_mat(o_s, runn_sum, sum_sqrs):
         
         Gets Sample Covariance-Matrix Estimate from given values for the three naive Algorithm states.
         
-        Parameters: 
-        
+        PARAMETERS: 
             o_s (scalar tf.tensor): count of samples observed so far
             runn_sum (tf.tensor): sum of layer activations so far
             sum_sqrs (tf.tensor): sum of squares of layer activations so far
             
-        Returns:
-        
+        RETURNS:
             cov_mat (tf.tensor): Estimated Covariance-matrix of the layer    
     """
     
@@ -36,10 +34,10 @@ def get_eig(cov_mat):
     """
         Computes the Eigenvalue/Eigenvector pairs for a given Covariance-matrix.
         
-        Parameters:
+        PARAMETERS:
             cov_mat (2D tf.tensor): nxn Covariance-matrix 
         
-        Returns:
+        RETURNS:
             eig_vals (tf.tensor): "listed" n Eigenvalues in non-decreasing order (-> necessary for estimating saturation)
             eig_vecs (tf.tensor): "listed" n Eigenvectors in corresponding(?) order (-> necessary for projecting layer)
             
@@ -70,8 +68,12 @@ def get_k(evals, delta=0.99):
                 
             Computing k by counting ratios satisfying  "<=" from all ratios avoids branches/loops, 
             a possible source of problems in TensorFlows Graph Mode.
+        
+        PARAMETERS:
+            evals ((list of) tf.tensors?): the eigenvalues (in desc. order ithink?) for evaluating the lossless k
+            delta (float): the set threshold deciding what k is lossless
             
-        Returns: 
+        RETURNS: 
             k, idxs of eigvals #TODO just count k eigvecs          
     """
     #assert evals.dtype == tf.float64, "EigVals not f64 in llk"
@@ -107,7 +109,7 @@ def get_sat(features, o_s, r_s, s_s, delta=0.99):
         by performing/including all single steps in order. 
         Calls functions:  get_cov_mat(), get_eig(), get_k()
         
-        Parameters: 
+        PARAMETERS: 
         
             features (scalar tf.tensor): number of layer features
             o_s (scalar tf.tensor): number of counted samples so far
@@ -115,7 +117,7 @@ def get_sat(features, o_s, r_s, s_s, delta=0.99):
             s_s (tf.tensor): sum of squared activations so far
             delta (float): value for threshold on the fraction of "explained" variance
 
-        Returns: 
+        RETURNS: 
             
             saturation (scalar tf.tensor): saturations value resulting from inputs        
     """
@@ -130,12 +132,12 @@ def saturation(cov_mat, features, delta=0.99):
     """
         Gets Saturation from given Covariance-matrix, number of features (layer width), and delta value.
         
-        Parameters:
+        PARAMETERS:
             cov_mat (tf.tensor): any Covariance-matrix 
             features (int???): number of units in layer (width) #TODO int?
             delta (float): chosen threshold for "lossless" retract
         
-        Returns:
+        RETURNS:
             saturation (tf.tensor): computed saturation
             
             
@@ -169,12 +171,12 @@ def get_update_values(self, input_tensor):
         #TODO Probably Obsolete right? Delete/Archive?  <-- <-- <--
         
         
-        Parameters:
+        PARAMETERS:
         
             self : Unnecessary??
             input_tensor (tf.tensor): the layer batch-activation to update states with
             
-        Returns:
+        RETURNS:
         
             batch_size (tuple): number of newly observed samples to update o_s with #TODO should be tensor instead of tuple right?     
             sum_over_batch (tf.tensor): Sum of activations over the batch to update running_sum with
@@ -215,11 +217,11 @@ def two_pass_cov(activations):
         TODO compare to naive algorithm covmat
         #should pass activations as one big numpy array sth. to_tensor bug slow
         
-        Parameters:
+        PARAMETERS:
             activations (tf.tensor): "listed" batch-activations of one epoch/measurement-window
         
-        #TODO check how this function was meant to work and what the two return values are lol
-        Returns: 
+        
+        RETURNS: #TODO check how this function was meant to work and what the two return values are lol
             cov_mat_from_batches (): ?
             cov_mat_from_epoch (): ?
             

@@ -296,8 +296,9 @@ class sat_results(keras.callbacks.Callback):
                 
 class sat_callback(keras.callbacks.Callback):
     """
-        Callback meant to do the simplest basic function, receiving each layers' batch_activation while measuring actively,
-        and further process each layer's activation according to what cov_alg's are tracked.
+        Callback retrieves 'raw' activations exposed in [log_layer] instances 
+        and processes activations further according to selected cov-algorithm.
+        
         
         -> outsource computations to rsc.
         -> take just the activations from the sublayers 
@@ -375,6 +376,10 @@ class sat_callback(keras.callbacks.Callback):
         
     
     def on_epoch_begin(self, epoch, logs=None):
+        """
+            Check if this epoch should be used for saturation. 
+            (Toggle active control flag)
+        """
         
         # Active only once per epoch interval in training case (add offset to start later after first y epochs?)
         if epoch%self.epoch_interval == 0:

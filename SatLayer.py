@@ -391,11 +391,13 @@ class sat_layer(keras.layers.Layer):
         input_tensor = tf.dtypes.cast(input_tensor, tf.float64)    
         shape=input_tensor.get_shape() #get_shape might fail
         
-        #print(f"input_tensor: {input_tensor}")
-        #print(f"shape: {shape}")
-        #print(f"batchsize: {shape[0]}")
-        #print(f"o_s: {self.o_s.shape}")
-        
+        # DEBUGGING / INSPECTING:
+        if False:
+            print(f"input_tensor: {input_tensor}")
+            print(f"shape: {shape}")
+            print(f"batchsize: {shape[0]}")
+            print(f"o_s: {self.o_s.shape}")
+            
         #OBSERVED SAMPLES
         batch_size = [shape[0]] 
         if batch_size == [None]:
@@ -573,17 +575,18 @@ class log_layer(keras.layers.Layer):
         #TODO decide: expose as keras weight or tf.variable? init in __init__() or build()?
         
         EXPOSES activations for CB access. (without casting dtype).
-        
-        
+          
     """
-    
     
     def __init__(self, input_shape, dtype=None, name=None, **kwargs):
         """
             Initialize a basic Layer object. (maybe the activation var too, but probably rather in build())
             
+            
+            PARAMETERS:
+                input_shape (list?np?): input shape for the layer #TODO if i can't have 
+            
         """
-        
         
         super(log_layer, self).__init__(name=name, **kwargs)
         
@@ -606,10 +609,13 @@ class log_layer(keras.layers.Layer):
         
         """
         
+        print(f"input_shape in log_layer.build(): {input_shape}")
+        
         #work in progress
-        self.activation = tf.Variable(shape=input_shape, 
+        self.activation = tf.Variable(initial_value=tf.zeros(input_shape),
                                       validate_shape=False,
                                       trainable=False)
+        
         
         #No idea where I copy pasted this from but probably safe to delete other than the shape stuff
         """
@@ -626,17 +632,47 @@ class log_layer(keras.layers.Layer):
         """ 
             Assigns the new activation to the tracking variable.
         """
-        
-        self.activation.assign(activation) #, validate_shape=False)
+        if activation.get_shape()[0] != None:
+            self.activation.assign(activation) #, validate_shape=False)
     
         return self.activation 
    
-    
     def call(self, activation):
         """
             Returns update function that then assigns the activation batch-tensor.
         """
         return self.update(activation)
+    
+    def __call__(self, input, ):
+        """
+            Passes activation to self.update().
+            (returns resultS so "parent"-layer depends on execution of FSS updates.) (necessary?)
+            Calls build() if weights/states not initialized yet. 
+            
+            NAIVE ALGORITHM
+            
+            CALLS:      self.update(input),     self.build()
+            CALLED BY:  "parent"/mydense.call()
+            
+            PARAMETERS: 
+                input (keras tensor): activation passed by "parent"-layer
+                
+            RETURNS:
+                update_results (tf tensors): outputs of self.update(input)  
+            
+            TODO Merge with update()? ~wrapping it like now is readable and modular
+        """
+
+        #BUILD LAYER ON FIRST TIME (using tf.Variable not keras.weights)
+        if not hasattr(self, 'activation'):
+            self.build(input.get_shape().as_list())
+            
+        #DEBUGGING ONLY!    
+        if input.get_shape() != self.activation.get_shape():
+            raise Exception(f"Layer {self.name} Expose-variable shape does not match Input shape!")
+
+        return self.update(input)
+        
     
     #ideally not overwrite that function
     #def __call__(self, input):

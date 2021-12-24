@@ -99,7 +99,7 @@ class mydense(keras.layers.Dense):
         
         #ADD SUBLAYERS
         if not self.weights==[]:
-            self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))
+            #self.sat_layer = SatLayer.sat_layer(input_shape=output_shape, name="sat_l_"+str(self.name))
             self.log_layer = SatLayer.log_layer(input_shape=output_shape, dtype=self.dtype, name="log_l_"+str(self.name))    
         
         #SAVE INFO ON LAYER PROPERTIES (#TODO DEPRECATED? DELETE? STATES FULLY TRACKED IN SUBLAYER?)
@@ -146,8 +146,8 @@ class mydense(keras.layers.Dense):
         """    
         out = super().call(inputs)
         
-        _o, _r, _s, = self.sat_layer(out)
-        o, r, s, = self.sat_layer.get_update_values(out)
+        #_o, _r, _s, = self.sat_layer(out)
+        #o, r, s, = self.sat_layer.get_update_values(out)
         
         _ = self.log_layer(out)
          
@@ -238,7 +238,8 @@ class myconv(keras.layers.Conv2D):
         #_o, _r, _s, = self.sat_layer(out)
         #o, r, s, = self.sat_layer.get_update_values(out)
         
-        _ = self.log_layer(out)
+        #_ = self.log_layer(out)
+        #_ = self.log_layer.update(out) 
          
         #self.add_metric(o, aggregation=tf.VariableAggregation.SUM, name="tf_aggregation")
         
@@ -249,14 +250,17 @@ class myconv(keras.layers.Conv2D):
                   
 def clone_fn(old_layer):
     """
-        Clones a single layer and extends it if layer's class is saturation capable.
+        Clones and extends a single layer if it's class is saturation capable.
     
-        This function is to be passed to clone_model() and applied to each original layer,
-        defining its cloned version. Usually a layer of the same class is created by the classmethod
-        from_config() using config info of the original layer. (If no custom cone_fn() is specified)
-        Here instead a layer (mydense) extending the base class is instantiated by from_config_params()
-        in order to pass additional arguments on to init that are not covered by from_config().
+        This function is passed to clone_model() to specify how to copy each original layer. 
         
+        - Default case / Layer class not supported (-> same as when no clone_fn passed): 
+            creates new instance of base-class with '@cls from_config(original_config)'. 
+
+        - Custom case / Layer class supported:
+            creates instance of class extending base-class with '@cls from_config_params(params, original_config)'
+            passing additional argument params containing layer-information needed for custom intialization.
+
         CALLS: mydense.from_config_params() /(old_layer.__class__.from_config())
         CALLED BY: clone_model(original_model)
         
@@ -268,11 +272,13 @@ def clone_fn(old_layer):
         
     """
     
-    #print(old_layer.__class__)
-    #print(old_layer.__dict__) -> super insightful       
-    #new_layer = old_layer.__class__.from_config(old_layer.get_config())    
-    
-    #Clone Dense layers with added FSS functionality:
+    # DEBUGGING / INSPECTION
+    if False:
+        print(old_layer.__class__)
+        print(old_layer.__dict__) #-> super insightful       
+        new_layer = old_layer.__class__.from_config(old_layer.get_config())    
+        
+    # CLONE DENSE LAYER - ADDED FSS FUNCTIONALITY:
     if old_layer.__class__==tf.keras.layers.Dense:
         config = old_layer.get_config()
         assert old_layer.output_shape, "layer {} output shape undefined! (never called)".format(old_layer.name) 
@@ -282,8 +288,20 @@ def clone_fn(old_layer):
         new_layer = mydense.from_config_params(params, config)
         return new_layer
     
-    #Clone unsupported layers normally
-    else:
+    # CLONE CONV LAYER - ADDED FSS FUNCTIONALITY:
+    if old_layer.__class__==tf.keras.layers.Conv2D:
+        config = old_layer.get_config()
+        assert old_layer.output_shape, "layer {} output shape undefined! (never called)".format(old_layer.name) 
+        params = {"input_shape_build": old_layer.input_shape,
+                  "init_weights": old_layer.get_weights(),
+                  "output_shape": old_layer.output_shape} #for never called models out_shp not def -> add dry run in func?
+        new_layer = myconv.from_config_params(params, config)
+        return new_layer
+    
+    
+    #TODO Uncomment the Copying of old layer weights in the unsupported layer block: !!
+    # CLONE UNSUPPORTED LAYER NORMALLY:    #TODO -> or find and call the default clone_fn() here~!!
+    if True:
         #try and see if i need to copy weights separately, think not but can't google rn
         new_layer = old_layer.__class__.from_config(old_layer.get_config())
         #new_layer.call(np.ones(shape=(1,)+old_layer.input_shape[1:] ))
@@ -300,7 +318,7 @@ def clone_fn(old_layer):
     
 def satify_model(model, compile_dict=None, batch_size=None):
     """
-        Clones a keras.model to add FSS functionality 
+        Clones a keras model to add FSS functionality 
         and manages details of the process / cloned model.
         
         CALLS:      clone_model() (-> clone_fn())
@@ -312,12 +330,11 @@ def satify_model(model, compile_dict=None, batch_size=None):
             batch_size (int ?):     batch_size that the clone will take and be able to process
             
         RETURNS:
-            clone (keras.model):    model capable of tracking and generating values relating to FSS   
+            clone (keras model):    model capable of tracking and generating values relating to FSS   
     """
     
     
-    if compile_dict==None:
-        compile_dict={}
+    
     
     assert model.output_shape, "Output Shape not defined! (Call model to build)"
     
@@ -325,7 +342,7 @@ def satify_model(model, compile_dict=None, batch_size=None):
     
     clone = tf.keras.models.clone_model(model, input_tensors=model.inputs, clone_function=clone_fn)
     
-    # check if clone and model prediction diff comes from non-mydense layers not having weights copied.
+    #TODO check if clone and model prediction diff comes from non-mydense layers not having weights copied.
     for clone_layer, og_layer in zip(clone.layers, model.layers): 
         print(f"Layer {clone_layer.__class__.__name__}")  
         #print(f"config, weights: {clone_layer.get_config()}, {clone_layer.get_weights()}")
@@ -334,8 +351,11 @@ def satify_model(model, compile_dict=None, batch_size=None):
         #    assert (np.allclose(clone_layer.get_weights(), og_layer.get_weights()) \
         #        or clone_layer.__class__ == mydense), f"Layer weights don't match! Class: {og_layer.__class__.__name}" 
     
+    
+    """
     example_input_shp = (1,) + model.input_shape[1:]
     z_in = np.ones(shape=example_input_shp)
+    """
     
     """
     clone.predict(z_in)
@@ -349,6 +369,9 @@ def satify_model(model, compile_dict=None, batch_size=None):
         f"Cloned Model Predictions don't match Original! \n Original: {model.predict(z_in)}, \n Clone: {clone.predict(z_in)}  \n"
     """
     
+    if compile_dict==None:
+        compile_dict={}
+    
     default_compile_dict = {
         'optimizer': model.optimizer.__class__.__name__,
         'loss': model.loss,
@@ -357,6 +380,7 @@ def satify_model(model, compile_dict=None, batch_size=None):
     }    
     #second dict overwrites conflicting default keys
     merged_dict = {**default_compile_dict, **compile_dict}    
+        
         
     clone.compile(**merged_dict)
  

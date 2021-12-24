@@ -16,7 +16,11 @@ from tensorflow.keras.utils import to_categorical
 
 def get_cifar10(one_hot=True, in_dtype='float64'):
     """
-        Returns: tuples training, test of cifar10 with one-hot labels, [0,1] scaled pixel values, float64 dtype 
+        Returns tuples of training/testing cifar10 (data, labels).
+    
+        RETURNS: 
+            training data (tuple): cifar10 data and one-hot labels, pixel-values scaled to [0;1], dtype float64
+            testing data (tuple): cifar10 data and one-hot labels, pixel-values scaled to [0;1], dtype float64
     """
     
     (x_train, y_train), (x_test, y_test) = cifar10.load_data()
